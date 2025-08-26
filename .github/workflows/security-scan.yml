@@ -1,0 +1,753 @@
+name: Security Scanning & Vulnerability Assessment
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run security scans daily at 3 AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan to run'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - dependencies
+          - secrets
+          - containers
+          - infrastructure
+          - sast
+          - dast
+
+env:
+  PHP_VERSION: '8.2'
+  NODE_VERSION: '18'
+  PNPM_VERSION: '8'
+
+jobs:
+  # Job para detectar cambios y servicios
+  detect-services:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.services.outputs.list }}
+      frontend: ${{ steps.frontend.outputs.changed }}
+      infrastructure: ${{ steps.infrastructure.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Detect services
+        id: services
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Escanear todos los servicios
+            services=$(find services -name "composer.json" -type f | sed 's|/composer.json||' | sed 's|services/||' | jq -R -s -c 'split("\n")[:-1]')
+          else
+            # Detectar servicios con cambios
+            services=$(git diff --name-only HEAD~1 HEAD | grep '^services/' | cut -d'/' -f2 | sort -u | jq -R -s -c 'split("\n")[:-1]')
+          fi
+          echo "list=$services" >> $GITHUB_OUTPUT
+      
+      - name: Check frontend changes
+        id: frontend
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            changed=$(git diff --name-only HEAD~1 HEAD | grep '^frontend/' | wc -l)
+            echo "changed=$([ $changed -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Check infrastructure changes
+        id: infrastructure
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            changed=$(git diff --name-only HEAD~1 HEAD | grep -E '(docker|infrastructure|.github)' | wc -l)
+            echo "changed=$([ $changed -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          fi
+
+  # Análisis de dependencias y vulnerabilidades conocidas
+  dependency-security-scan:
+    needs: detect-services
+    if: github.event.inputs.scan_type == 'dependencies' || github.event.inputs.scan_type == 'full' || github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-services.outputs.services) }}
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, mysql, redis
+      
+      - name: Install Composer dependencies
+        working-directory: services/${{ matrix.service }}
+        run: composer install --no-dev --prefer-dist
+      
+      - name: Composer Security Audit
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "🔒 Running Composer security audit for ${{ matrix.service }}..."
+          
+          # Ejecutar audit de Composer
+          composer audit --format=json > composer-audit.json || true
+          
+          # Mostrar resumen
+          if [ -f composer-audit.json ]; then
+            vulnerabilities=$(jq '.advisories | length' composer-audit.json 2>/dev/null || echo "0")
+            echo "Composer Audit: $vulnerabilities vulnerabilities found"
+            
+            # Mostrar vulnerabilidades críticas
+            if [ "$vulnerabilities" -gt 0 ]; then
+              echo "⚠️ Critical vulnerabilities found:"
+              jq -r '.advisories[] | select(.severity == "high" or .severity == "critical") | "- \(.title) (\(.severity))"' composer-audit.json || true
+            fi
+          fi
+      
+      - name: PHP Security Checker
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "🔍 Running PHP Security Checker..."
+          
+          # Instalar Local PHP Security Checker
+          curl -L https://github.com/fabpot/local-php-security-checker/releases/download/v2.0.6/local-php-security-checker_2.0.6_linux_amd64 -o security-checker
+          chmod +x security-checker
+          
+          # Ejecutar verificación
+          ./security-checker --format=json > php-security-report.json || true
+          
+          if [ -f php-security-report.json ]; then
+            issues=$(jq '. | length' php-security-report.json 2>/dev/null || echo "0")
+            echo "PHP Security Checker: $issues security issues found"
+          fi
+      
+      - name: Upload PHP security results
+        uses: actions/upload-artifact@v3
+        with:
+          name: php-security-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/composer-audit.json
+            services/${{ matrix.service }}/php-security-report.json
+
+  # Análisis de dependencias del frontend
+  frontend-security-scan:
+    needs: detect-services
+    if: needs.detect-services.outputs.frontend == 'true' && (github.event.inputs.scan_type == 'dependencies' || github.event.inputs.scan_type == 'full' || github.event_name != 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: pnpm Security Audit
+        working-directory: frontend
+        run: |
+          echo "🔒 Running pnpm security audit..."
+          pnpm audit --audit-level moderate --json > pnpm-audit.json || true
+          
+          if [ -f pnpm-audit.json ]; then
+            vulnerabilities=$(jq '.metadata.vulnerabilities.total' pnpm-audit.json 2>/dev/null || echo "0")
+            high=$(jq '.metadata.vulnerabilities.high' pnpm-audit.json 2>/dev/null || echo "0")
+            critical=$(jq '.metadata.vulnerabilities.critical' pnpm-audit.json 2>/dev/null || echo "0")
+            
+            echo "pnpm Audit: $vulnerabilities total vulnerabilities ($critical critical, $high high)"
+            
+            if [ "$critical" -gt 0 ] || [ "$high" -gt 0 ]; then
+              echo "⚠️ High/Critical vulnerabilities found - review required"
+            fi
+          fi
+      
+      - name: Retire.js Security Scan
+        working-directory: frontend
+        run: |
+          echo "🔍 Running Retire.js security scan..."
+          
+          # Instalar retire.js
+          npm install -g retire
+          
+          # Ejecutar scan
+          retire --outputformat json --outputpath retire-report.json || true
+          
+          if [ -f retire-report.json ]; then
+            vulnerabilities=$(jq '. | length' retire-report.json 2>/dev/null || echo "0")
+            echo "Retire.js: $vulnerabilities known vulnerabilities found"
+          fi
+      
+      - name: Upload frontend security results
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-security
+          path: |
+            frontend/pnpm-audit.json
+            frontend/retire-report.json
+
+  # Escaneo de secretos y credenciales
+  secrets-scan:
+    if: github.event.inputs.scan_type == 'secrets' || github.event.inputs.scan_type == 'full' || github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: TruffleHog Secrets Scan
+        run: |
+          echo "🔍 Running TruffleHog secrets scan..."
+          
+          # Instalar TruffleHog
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+          
+          # Ejecutar scan
+          trufflehog git file://. --json > trufflehog-report.json || true
+          
+          # Procesar resultados
+          if [ -f trufflehog-report.json ]; then
+            secrets=$(wc -l < trufflehog-report.json)
+            echo "TruffleHog: $secrets potential secrets found"
+            
+            # Mostrar secretos verificados
+            verified=$(jq -r 'select(.Verified == true) | .DetectorName' trufflehog-report.json | wc -l)
+            if [ "$verified" -gt 0 ]; then
+              echo "⚠️ $verified verified secrets found - immediate action required!"
+              jq -r 'select(.Verified == true) | "- \(.DetectorName): \(.Raw[:20])..."' trufflehog-report.json
+            fi
+          fi
+      
+      - name: GitLeaks Secrets Scan
+        run: |
+          echo "🔍 Running GitLeaks secrets scan..."
+          
+          # Instalar GitLeaks
+          curl -sSfL https://github.com/zricethezav/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz | tar xz
+          chmod +x gitleaks
+          
+          # Ejecutar scan
+          ./gitleaks detect --report-format json --report-path gitleaks-report.json || true
+          
+          if [ -f gitleaks-report.json ]; then
+            leaks=$(jq '. | length' gitleaks-report.json 2>/dev/null || echo "0")
+            echo "GitLeaks: $leaks potential leaks found"
+            
+            if [ "$leaks" -gt 0 ]; then
+              echo "⚠️ Potential secrets detected:"
+              jq -r '.[] | "- \(.RuleID) in \(.File):\(.StartLine)"' gitleaks-report.json | head -10
+            fi
+          fi
+      
+      - name: Upload secrets scan results
+        uses: actions/upload-artifact@v3
+        with:
+          name: secrets-scan
+          path: |
+            trufflehog-report.json
+            gitleaks-report.json
+
+  # Análisis estático de seguridad (SAST)
+  static-security-analysis:
+    needs: detect-services
+    if: github.event.inputs.scan_type == 'sast' || github.event.inputs.scan_type == 'full' || github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-services.outputs.services) }}
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, mysql, redis
+      
+      - name: Install dependencies
+        working-directory: services/${{ matrix.service }}
+        run: composer install --no-dev --prefer-dist
+      
+      - name: PHPStan Security Analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "🔒 Running PHPStan security analysis for ${{ matrix.service }}..."
+          
+          # Instalar PHPStan con extensiones de seguridad
+          composer require --dev phpstan/phpstan phpstan/extension-installer larastan/larastan || true
+          
+          # Crear configuración de seguridad
+          cat > phpstan-security.neon << EOF
+          parameters:
+              level: 6
+              paths:
+                  - app
+              excludePaths:
+                  - app/Console/Kernel.php
+                  - app/Http/Kernel.php
+              checkMissingIterableValueType: false
+              checkGenericClassInNonGenericObjectType: false
+              reportUnmatchedIgnoredErrors: false
+          EOF
+          
+          # Ejecutar análisis
+          vendor/bin/phpstan analyse --configuration=phpstan-security.neon --error-format=json --no-progress > phpstan-security.json || true
+          
+          if [ -f phpstan-security.json ]; then
+            errors=$(jq '.totals.file_errors' phpstan-security.json 2>/dev/null || echo "0")
+            echo "PHPStan Security: $errors potential security issues found"
+          fi
+      
+      - name: Psalm Security Analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "🔒 Running Psalm security analysis..."
+          
+          # Instalar Psalm
+          composer require --dev vimeo/psalm || true
+          
+          # Inicializar configuración si no existe
+          if [ ! -f psalm.xml ]; then
+            vendor/bin/psalm --init || true
+          fi
+          
+          # Ejecutar análisis de taint (seguridad)
+          vendor/bin/psalm --taint-analysis --output-format=json --no-progress > psalm-security.json 2>/dev/null || true
+          
+          if [ -f psalm-security.json ]; then
+            issues=$(jq '. | length' psalm-security.json 2>/dev/null || echo "0")
+            echo "Psalm Security: $issues taint analysis issues found"
+            
+            # Mostrar issues críticos
+            if [ "$issues" -gt 0 ]; then
+              echo "⚠️ Security taint issues:"
+              jq -r '.[] | select(.severity == "error") | "- \(.message) in \(.file_name):\(.line_from)"' psalm-security.json | head -5
+            fi
+          fi
+      
+      - name: Upload SAST results
+        uses: actions/upload-artifact@v3
+        with:
+          name: sast-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/phpstan-security.json
+            services/${{ matrix.service }}/psalm-security.json
+
+  # Escaneo de contenedores Docker
+  container-security-scan:
+    if: github.event.inputs.scan_type == 'containers' || github.event.inputs.scan_type == 'full' || github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build Docker images for scanning
+        run: |
+          echo "🐳 Building Docker images for security scanning..."
+          
+          # Construir imágenes base
+          docker build -f docker/php/Dockerfile -t wl-school-php:scan .
+          docker build -f docker/nginx/Dockerfile -t wl-school-nginx:scan .
+          
+          # Listar imágenes construidas
+          docker images | grep wl-school
+      
+      - name: Trivy Container Scan
+        run: |
+          echo "🔍 Running Trivy container security scan..."
+          
+          # Instalar Trivy
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          
+          # Escanear imágenes
+          echo "Scanning PHP image..."
+          trivy image --format json --output trivy-php.json wl-school-php:scan || true
+          
+          echo "Scanning Nginx image..."
+          trivy image --format json --output trivy-nginx.json wl-school-nginx:scan || true
+          
+          # Procesar resultados
+          for file in trivy-*.json; do
+            if [ -f "$file" ]; then
+              critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$file" 2>/dev/null || echo "0")
+              high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$file" 2>/dev/null || echo "0")
+              echo "$file: $critical critical, $high high vulnerabilities"
+            fi
+          done
+      
+      - name: Docker Bench Security
+        run: |
+          echo "🔒 Running Docker Bench Security..."
+          
+          # Clonar Docker Bench Security
+          git clone https://github.com/docker/docker-bench-security.git
+          cd docker-bench-security
+          
+          # Ejecutar benchmark
+          sudo ./docker-bench-security.sh -l docker-bench-results.log || true
+          
+          # Procesar resultados
+          if [ -f docker-bench-results.log ]; then
+            warnings=$(grep -c "\[WARN\]" docker-bench-results.log || echo "0")
+            info=$(grep -c "\[INFO\]" docker-bench-results.log || echo "0")
+            echo "Docker Bench: $warnings warnings, $info info items"
+          fi
+      
+      - name: Upload container scan results
+        uses: actions/upload-artifact@v3
+        with:
+          name: container-security
+          path: |
+            trivy-*.json
+            docker-bench-security/docker-bench-results.log
+
+  # Análisis de infraestructura como código
+  infrastructure-security-scan:
+    needs: detect-services
+    if: needs.detect-services.outputs.infrastructure == 'true' && (github.event.inputs.scan_type == 'infrastructure' || github.event.inputs.scan_type == 'full' || github.event_name != 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Checkov Infrastructure Scan
+        run: |
+          echo "🏗️ Running Checkov infrastructure security scan..."
+          
+          # Instalar Checkov
+          pip install checkov
+          
+          # Escanear archivos de infraestructura
+          checkov -d . --framework dockerfile,docker_compose,github_actions --output json --output-file checkov-report.json || true
+          
+          if [ -f checkov-report.json ]; then
+            failed=$(jq '.summary.failed' checkov-report.json 2>/dev/null || echo "0")
+            passed=$(jq '.summary.passed' checkov-report.json 2>/dev/null || echo "0")
+            echo "Checkov: $failed failed checks, $passed passed checks"
+            
+            # Mostrar fallos críticos
+            if [ "$failed" -gt 0 ]; then
+              echo "⚠️ Critical infrastructure issues:"
+              jq -r '.results.failed_checks[] | select(.severity == "HIGH" or .severity == "CRITICAL") | "- \(.check_name) in \(.file_path)"' checkov-report.json | head -5
+            fi
+          fi
+      
+      - name: Hadolint Dockerfile Scan
+        run: |
+          echo "🐳 Running Hadolint Dockerfile security scan..."
+          
+          # Instalar Hadolint
+          curl -L https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64 -o hadolint
+          chmod +x hadolint
+          
+          # Escanear Dockerfiles
+          find . -name "Dockerfile*" -type f | while read dockerfile; do
+            echo "Scanning $dockerfile..."
+            ./hadolint --format json "$dockerfile" > "hadolint-$(basename "$dockerfile").json" 2>/dev/null || true
+          done
+          
+          # Consolidar resultados
+          find . -name "hadolint-*.json" -type f | while read report; do
+            if [ -f "$report" ]; then
+              issues=$(jq '. | length' "$report" 2>/dev/null || echo "0")
+              echo "$(basename "$report"): $issues issues found"
+            fi
+          done
+      
+      - name: Upload infrastructure scan results
+        uses: actions/upload-artifact@v3
+        with:
+          name: infrastructure-security
+          path: |
+            checkov-report.json
+            hadolint-*.json
+
+  # CodeQL Analysis (GitHub's semantic code analysis)
+  codeql-analysis:
+    if: github.event.inputs.scan_type == 'sast' || github.event.inputs.scan_type == 'full' || github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    
+    strategy:
+      matrix:
+        language: [ 'javascript', 'php' ]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+      
+      - name: Setup PHP (for PHP analysis)
+        if: matrix.language == 'php'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+      
+      - name: Setup Node.js (for JavaScript analysis)
+        if: matrix.language == 'javascript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:${{matrix.language}}"
+
+  # Generar reporte consolidado de seguridad
+  generate-security-report:
+    needs: [dependency-security-scan, frontend-security-scan, secrets-scan, static-security-analysis, container-security-scan, infrastructure-security-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all security scan results
+        uses: actions/download-artifact@v3
+        with:
+          path: security-results
+      
+      - name: Generate consolidated security report
+        run: |
+          echo "# 🔒 Security Assessment Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Type:** ${{ github.event.inputs.scan_type || 'full' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Inicializar contadores
+          total_critical=0
+          total_high=0
+          total_medium=0
+          total_low=0
+          
+          # Analizar resultados de dependencias PHP
+          echo "## 🐘 PHP Dependencies Security" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Vulnerabilities | Critical | High | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-----------------|----------|------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          for service_dir in security-results/php-security-*; do
+            if [ -d "$service_dir" ]; then
+              service=$(basename "$service_dir" | sed 's/php-security-//')
+              
+              vulnerabilities="0"
+              critical="0"
+              high="0"
+              status="✅ PASS"
+              
+              if [ -f "$service_dir/composer-audit.json" ]; then
+                vulnerabilities=$(jq '.advisories | length' "$service_dir/composer-audit.json" 2>/dev/null || echo "0")
+                critical=$(jq '[.advisories[] | select(.severity == "critical")] | length' "$service_dir/composer-audit.json" 2>/dev/null || echo "0")
+                high=$(jq '[.advisories[] | select(.severity == "high")] | length' "$service_dir/composer-audit.json" 2>/dev/null || echo "0")
+                
+                if [ "$critical" -gt 0 ]; then
+                  status="❌ CRITICAL"
+                elif [ "$high" -gt 0 ]; then
+                  status="⚠️ HIGH"
+                elif [ "$vulnerabilities" -gt 0 ]; then
+                  status="⚠️ MEDIUM"
+                fi
+                
+                total_critical=$((total_critical + critical))
+                total_high=$((total_high + high))
+              fi
+              
+              echo "| $service | $vulnerabilities | $critical | $high | $status |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Analizar resultados del frontend
+          if [ -d "security-results/frontend-security" ]; then
+            echo "## ⚛️ Frontend Dependencies Security" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ -f "security-results/frontend-security/pnpm-audit.json" ]; then
+              total_vuln=$(jq '.metadata.vulnerabilities.total' "security-results/frontend-security/pnpm-audit.json" 2>/dev/null || echo "0")
+              critical_vuln=$(jq '.metadata.vulnerabilities.critical' "security-results/frontend-security/pnpm-audit.json" 2>/dev/null || echo "0")
+              high_vuln=$(jq '.metadata.vulnerabilities.high' "security-results/frontend-security/pnpm-audit.json" 2>/dev/null || echo "0")
+              
+              status="✅ PASS"
+              if [ "$critical_vuln" -gt 0 ]; then
+                status="❌ CRITICAL"
+              elif [ "$high_vuln" -gt 0 ]; then
+                status="⚠️ HIGH"
+              elif [ "$total_vuln" -gt 0 ]; then
+                status="⚠️ MEDIUM"
+              fi
+              
+              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| Total Vulnerabilities | $total_vuln |" >> $GITHUB_STEP_SUMMARY
+              echo "| Critical | $critical_vuln |" >> $GITHUB_STEP_SUMMARY
+              echo "| High | $high_vuln |" >> $GITHUB_STEP_SUMMARY
+              echo "| Status | $status |" >> $GITHUB_STEP_SUMMARY
+              
+              total_critical=$((total_critical + critical_vuln))
+              total_high=$((total_high + high_vuln))
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Analizar resultados de secretos
+          if [ -d "security-results/secrets-scan" ]; then
+            echo "## 🔐 Secrets & Credentials Scan" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            trufflehog_secrets="0"
+            gitleaks_secrets="0"
+            verified_secrets="0"
+            
+            if [ -f "security-results/secrets-scan/trufflehog-report.json" ]; then
+              trufflehog_secrets=$(wc -l < "security-results/secrets-scan/trufflehog-report.json")
+              verified_secrets=$(jq -r 'select(.Verified == true)' "security-results/secrets-scan/trufflehog-report.json" | wc -l)
+            fi
+            
+            if [ -f "security-results/secrets-scan/gitleaks-report.json" ]; then
+              gitleaks_secrets=$(jq '. | length' "security-results/secrets-scan/gitleaks-report.json" 2>/dev/null || echo "0")
+            fi
+            
+            status="✅ PASS"
+            if [ "$verified_secrets" -gt 0 ]; then
+              status="❌ CRITICAL - Verified secrets found!"
+            elif [ "$trufflehog_secrets" -gt 0 ] || [ "$gitleaks_secrets" -gt 0 ]; then
+              status="⚠️ REVIEW - Potential secrets detected"
+            fi
+            
+            echo "| Tool | Potential Secrets | Verified | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|-------------------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| TruffleHog | $trufflehog_secrets | $verified_secrets | $status |" >> $GITHUB_STEP_SUMMARY
+            echo "| GitLeaks | $gitleaks_secrets | N/A | $([ "$gitleaks_secrets" -gt 0 ] && echo "⚠️ REVIEW" || echo "✅ PASS") |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Resumen ejecutivo
+          echo "## 📊 Executive Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          overall_status="✅ SECURE"
+          if [ "$total_critical" -gt 0 ]; then
+            overall_status="❌ CRITICAL ISSUES FOUND"
+          elif [ "$total_high" -gt 0 ]; then
+            overall_status="⚠️ HIGH RISK ISSUES FOUND"
+          fi
+          
+          echo "**Overall Security Status:** $overall_status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Risk Level | Count | Action Required |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|-------|-----------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Critical | $total_critical | Immediate fix required |" >> $GITHUB_STEP_SUMMARY
+          echo "| High | $total_high | Fix within 24-48 hours |" >> $GITHUB_STEP_SUMMARY
+          echo "| Medium | $total_medium | Fix within 1 week |" >> $GITHUB_STEP_SUMMARY
+          echo "| Low | $total_low | Fix within 1 month |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Recomendaciones
+          echo "## 🎯 Recommendations" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$total_critical" -gt 0 ]; then
+            echo "1. **URGENT:** Address all critical vulnerabilities immediately" >> $GITHUB_STEP_SUMMARY
+            echo "2. Block deployment until critical issues are resolved" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "$total_high" -gt 0 ]; then
+            echo "3. Schedule high-priority vulnerability fixes" >> $GITHUB_STEP_SUMMARY
+            echo "4. Review and update dependency management policies" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "5. Implement automated security scanning in CI/CD pipeline" >> $GITHUB_STEP_SUMMARY
+          echo "6. Regular security training for development team" >> $GITHUB_STEP_SUMMARY
+          echo "7. Establish incident response procedures" >> $GITHUB_STEP_SUMMARY
+          
+          # Establecer variables de salida para otros jobs
+          echo "TOTAL_CRITICAL=$total_critical" >> $GITHUB_ENV
+          echo "TOTAL_HIGH=$total_high" >> $GITHUB_ENV
+          echo "OVERALL_STATUS=$overall_status" >> $GITHUB_ENV
+      
+      - name: Create security issue if critical vulnerabilities found
+        if: env.TOTAL_CRITICAL > 0
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const title = `🚨 CRITICAL Security Vulnerabilities Detected - ${new Date().toISOString().split('T')[0]}`;
+            const body = `## Critical Security Alert
+            
+            Our automated security scan has detected **${process.env.TOTAL_CRITICAL}** critical vulnerabilities that require immediate attention.
+            
+            ### Immediate Actions Required:
+            1. **DO NOT DEPLOY** to production until these issues are resolved
+            2. Review the detailed security report in the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            3. Assign security team members to address critical issues
+            4. Update all affected dependencies
+            5. Re-run security scans after fixes
+            
+            ### Severity Breakdown:
+            - Critical: ${process.env.TOTAL_CRITICAL}
+            - High: ${process.env.TOTAL_HIGH}
+            
+            **Status:** ${process.env.OVERALL_STATUS}
+            
+            This issue was automatically created by the security scanning workflow.
+            `;
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['security', 'critical', 'automated']
+            });
+      
+      - name: Upload consolidated security report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report-consolidated
+          path: security-results/
+          retention-days: 90
+      
+      - name: Fail workflow if critical vulnerabilities found
+        if: env.TOTAL_CRITICAL > 0
+        run: |
+          echo "❌ Workflow failed due to critical security vulnerabilities"
+          echo "Critical vulnerabilities found: $TOTAL_CRITICAL"
+          echo "Please review the security report and fix all critical issues before proceeding."
+          exit 1

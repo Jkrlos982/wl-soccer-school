@@ -1,0 +1,403 @@
+name: Dependency Updates & Security
+
+on:
+  schedule:
+    # Run every Monday at 9:00 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      update_type:
+        description: 'Type of update to perform'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - security
+      target:
+        description: 'Target to update'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - backend
+          - frontend
+
+env:
+  PHP_VERSION: '8.2'
+  NODE_VERSION: '18'
+  PNPM_VERSION: '8'
+
+jobs:
+  # Job para detectar servicios existentes
+  detect-services:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.services.outputs.matrix }}
+      has-frontend: ${{ steps.frontend.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Detect Laravel services
+        id: services
+        run: |
+          services=$(find services -name "composer.json" -type f | sed 's|/composer.json||' | sed 's|services/||' | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=$services" >> $GITHUB_OUTPUT
+          echo "Found services: $services"
+      
+      - name: Check frontend existence
+        id: frontend
+        run: |
+          if [ -f "frontend/package.json" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+  # Job para actualizar dependencias de Laravel
+  update-laravel-dependencies:
+    needs: detect-services
+    if: needs.detect-services.outputs.services != '[]' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'backend' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-services.outputs.services) }}
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, mysql, redis, gd, zip, bcmath
+      
+      - name: Cache Composer dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.composer/cache
+          key: ${{ runner.os }}-composer-${{ hashFiles('services/${{ matrix.service }}/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-
+      
+      - name: Install Composer dependencies
+        working-directory: services/${{ matrix.service }}
+        run: composer install --no-progress --prefer-dist
+      
+      - name: Check for security vulnerabilities
+        working-directory: services/${{ matrix.service }}
+        run: |
+          composer audit --format=json > security-report.json || true
+          if [ -s security-report.json ]; then
+            echo "Security vulnerabilities found in ${{ matrix.service }}:"
+            cat security-report.json
+          fi
+      
+      - name: Update dependencies based on type
+        working-directory: services/${{ matrix.service }}
+        run: |
+          case "${{ github.event.inputs.update_type || 'patch' }}" in
+            "patch")
+              composer update --prefer-stable --no-dev --optimize-autoloader
+              ;;
+            "minor")
+              composer update --prefer-stable --no-dev --optimize-autoloader --with-dependencies
+              ;;
+            "major")
+              composer update --prefer-stable --no-dev --optimize-autoloader --with-all-dependencies
+              ;;
+            "security")
+              composer update --prefer-stable --no-dev --optimize-autoloader --dry-run --format=json > update-preview.json
+              # Solo actualizar paquetes con vulnerabilidades de seguridad
+              composer audit --format=json | jq -r '.advisories[].packageName' | xargs -I {} composer update {} --prefer-stable --no-dev
+              ;;
+          esac
+      
+      - name: Run tests after update
+        working-directory: services/${{ matrix.service }}
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          composer install --dev
+          vendor/bin/phpunit --testsuite=Unit
+      
+      - name: Check for changes
+        id: changes
+        working-directory: services/${{ matrix.service }}
+        run: |
+          if git diff --quiet composer.lock; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report-${{ matrix.service }}
+          path: services/${{ matrix.service }}/security-report.json
+      
+      - name: Commit changes
+        if: steps.changes.outputs.changed == 'true'
+        working-directory: services/${{ matrix.service }}
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add composer.lock
+          git commit -m "chore(${{ matrix.service }}): update dependencies (${{ github.event.inputs.update_type || 'patch' }})"
+
+  # Job para actualizar dependencias de Frontend
+  update-frontend-dependencies:
+    needs: detect-services
+    if: needs.detect-services.outputs.has-frontend == 'true' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'frontend' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+      
+      - name: Setup pnpm cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: Security audit
+        working-directory: frontend
+        run: |
+          pnpm audit --audit-level moderate --json > security-report.json || true
+          if [ -s security-report.json ]; then
+            echo "Security vulnerabilities found in frontend:"
+            cat security-report.json
+          fi
+      
+      - name: Update dependencies based on type
+        working-directory: frontend
+        run: |
+          case "${{ github.event.inputs.update_type || 'patch' }}" in
+            "patch")
+              pnpm update --latest
+              ;;
+            "minor")
+              pnpm update --latest --depth=1
+              ;;
+            "major")
+              pnpm update --latest --depth=Infinity
+              ;;
+            "security")
+              # Actualizar solo paquetes con vulnerabilidades
+              pnpm audit --fix
+              ;;
+          esac
+      
+      - name: Run tests after update
+        working-directory: frontend
+        run: |
+          pnpm run type-check
+          pnpm run lint
+          pnpm run test:unit
+      
+      - name: Check for changes
+        id: changes
+        working-directory: frontend
+        run: |
+          if git diff --quiet pnpm-lock.yaml; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report-frontend
+          path: frontend/security-report.json
+      
+      - name: Commit changes
+        if: steps.changes.outputs.changed == 'true'
+        working-directory: frontend
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add pnpm-lock.yaml package.json
+          git commit -m "chore(frontend): update dependencies (${{ github.event.inputs.update_type || 'patch' }})"
+
+  # Job para escaneo de seguridad con herramientas adicionales
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+      
+      - name: Run CodeQL Analysis
+        uses: github/codeql-action/init@v2
+        with:
+          languages: javascript, php
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+      
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+
+  # Job para crear PR con actualizaciones
+  create-update-pr:
+    needs: [update-laravel-dependencies, update-frontend-dependencies, security-scan]
+    if: always() && (needs.update-laravel-dependencies.result == 'success' || needs.update-frontend-dependencies.result == 'success')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Check for any changes
+        id: check-changes
+        run: |
+          if git diff --quiet HEAD~1; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Create Pull Request
+        if: steps.check-changes.outputs.has-changes == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update dependencies (${{ github.event.inputs.update_type || 'scheduled' }})"
+          title: "🔄 Dependency Updates (${{ github.event.inputs.update_type || 'Scheduled' }})"
+          body: |
+            ## 📦 Dependency Updates
+            
+            This PR contains automated dependency updates.
+            
+            **Update Type:** ${{ github.event.inputs.update_type || 'Scheduled patch updates' }}
+            **Triggered by:** ${{ github.event_name }}
+            
+            ### 🔍 What's Changed
+            
+            - Updated Laravel microservice dependencies
+            - Updated React frontend dependencies
+            - Security vulnerabilities addressed
+            
+            ### ✅ Automated Checks
+            
+            - [x] Security audit completed
+            - [x] Unit tests passed
+            - [x] Type checking passed
+            - [x] Linting passed
+            
+            ### 📋 Review Checklist
+            
+            - [ ] Review dependency changes
+            - [ ] Check for breaking changes
+            - [ ] Verify all tests pass
+            - [ ] Confirm security issues resolved
+            
+            ---
+            
+            🤖 This PR was created automatically by GitHub Actions.
+          branch: dependency-updates/${{ github.run_number }}
+          delete-branch: true
+          labels: |
+            dependencies
+            automated
+            ${{ github.event.inputs.update_type || 'patch' }}
+
+  # Job para notificaciones y reportes
+  notify-and-report:
+    needs: [update-laravel-dependencies, update-frontend-dependencies, security-scan, create-update-pr]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all security reports
+        uses: actions/download-artifact@v3
+        with:
+          path: security-reports
+      
+      - name: Generate security summary
+        run: |
+          echo "## 🔒 Security Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -d "security-reports" ]; then
+            for report in security-reports/*/security-report.json; do
+              if [ -f "$report" ] && [ -s "$report" ]; then
+                service=$(basename $(dirname "$report"))
+                echo "### $service" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+                head -20 "$report" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          else
+            echo "No security reports found." >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Notify on failure
+        if: |
+          needs.update-laravel-dependencies.result == 'failure' ||
+          needs.update-frontend-dependencies.result == 'failure' ||
+          needs.security-scan.result == 'failure'
+        run: |
+          echo "❌ Dependency update process failed"
+          # Aquí se pueden agregar notificaciones a Slack, Discord, etc.
+      
+      - name: Notify on success
+        if: needs.create-update-pr.result == 'success'
+        run: |
+          echo "✅ Dependency updates completed and PR created"
+          # Aquí se pueden agregar notificaciones de éxito

@@ -1,14 +1,390 @@
-# WL School - Aplicación de Marca Blanca para Escuelas de Fútbol
+# WL-School 🎓
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Laravel](https://img.shields.io/badge/Laravel-10+-red.svg)
-![React](https://img.shields.io/badge/React-18+-blue.svg)
-![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)
+**Sistema Integral de Gestión Escolar con Arquitectura de Microservicios**
 
-## 🏆 Descripción
+WL-School es una plataforma completa para la gestión de instituciones educativas, desarrollada con una arquitectura moderna de microservicios que garantiza escalabilidad, mantenibilidad y alta disponibilidad.
 
-**WL School** es una aplicación web progresiva (PWA) de marca blanca diseñada específicamente para la gestión integral de escuelas de fútbol. Construida con una arquitectura de microservicios moderna, permite a cada escuela personalizar completamente la aplicación con sus colores, logo y branding.
+## 🏗️ Arquitectura
+
+### Microservicios
+
+| Servicio | Puerto | Descripción | Tecnología |
+|----------|--------|-------------|------------|
+| **API Gateway** | 8000 | Punto de entrada unificado | Laravel 10 |
+| **Auth Service** | 8001 | Autenticación y autorización | Laravel 10 |
+| **Financial Service** | 8002 | Gestión financiera y pagos | Laravel 10 |
+| **Sports Service** | 8003 | Gestión deportiva | Laravel 10 |
+| **Notification Service** | 8004 | Sistema de notificaciones | Laravel 10 |
+| **Medical Service** | 8005 | Gestión médica | Laravel 10 |
+| **Payroll Service** | 8006 | Gestión de nómina | Laravel 10 |
+| **Report Service** | 8007 | Generación de reportes | Laravel 10 |
+| **Calendar Service** | 8008 | Gestión de calendario | Laravel 10 |
+| **Customization Service** | 8009 | Personalización del sistema | Laravel 10 |
+| **Frontend PWA** | 3000 | Aplicación web progresiva | React 18 |
+
+### Infraestructura
+
+| Componente | Puerto | Descripción |
+|------------|--------|-------------|
+| **Nginx** | 80/443 | Load balancer y reverse proxy |
+| **Redis** | 6379 | Cache y sesiones |
+| **MySQL** | 3306+ | Bases de datos (una por servicio) |
+| **phpMyAdmin** | 8080 | Administración de bases de datos |
+| **Redis Commander** | 8081 | Administración de Redis |
+
+## 🚀 Inicio Rápido
+
+### Prerrequisitos
+
+- Docker 20.10+
+- Docker Compose 2.0+
+- Git
+- Make (opcional, para comandos simplificados)
+
+### Instalación Automática
+
+```bash
+# Clonar el repositorio principal
+git clone https://github.com/Jkrlos982/wl-school.git
+cd wl-school
+
+# Configuración completa automática
+make setup
+# o
+./scripts/setup.sh
+```
+
+### Instalación Manual
+
+```bash
+# 1. Copiar archivo de configuración
+cp .env.example .env
+
+# 2. Editar configuración (opcional)
+nano .env
+
+# 3. Crear directorios necesarios
+mkdir -p storage/logs/{gateway,auth,financial,sports,notification,medical,payroll,report,calendar,customization,nginx}
+mkdir -p database/init nginx/ssl
+
+# 4. Generar certificados SSL para desarrollo
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout nginx/ssl/wl-school.key \
+  -out nginx/ssl/wl-school.crt \
+  -subj "/C=CO/ST=Bogota/L=Bogota/O=WL-School/OU=Development/CN=wl-school.local"
+
+# 5. Iniciar servicios
+docker-compose up -d
+```
+
+## 🛠️ Comandos de Desarrollo
+
+### Usando Make (Recomendado)
+
+```bash
+# Gestión de servicios
+make start          # Iniciar todos los servicios
+make stop           # Detener todos los servicios
+make restart        # Reiniciar todos los servicios
+make status         # Ver estado de los servicios
+make health         # Verificar salud de los servicios
+
+# Desarrollo
+make logs                    # Ver logs de todos los servicios
+make logs-auth-service       # Ver logs de un servicio específico
+make shell-api-gateway       # Abrir shell en un contenedor
+make test                    # Ejecutar tests en todos los servicios
+make test-financial-service  # Ejecutar tests en un servicio específico
+
+# Base de datos
+make migrate        # Ejecutar migraciones
+make seed          # Poblar bases de datos
+make backup        # Crear respaldo de bases de datos
+
+# Utilidades
+make build         # Construir imágenes
+make rebuild       # Reconstruir imágenes (sin cache)
+make clean         # Limpiar recursos de Docker
+make update        # Actualizar repositorios
+```
+
+### Usando Scripts Directamente
+
+```bash
+# Gestión de servicios
+./scripts/dev.sh start
+./scripts/dev.sh stop
+./scripts/dev.sh logs auth-service
+./scripts/dev.sh shell api-gateway
+
+# Reset completo del entorno
+./scripts/reset.sh
+```
+
+### Usando Docker Compose
+
+```bash
+# Comandos básicos
+docker-compose up -d              # Iniciar servicios
+docker-compose down               # Detener servicios
+docker-compose ps                 # Ver estado
+docker-compose logs -f [service]  # Ver logs
+
+# Ejecutar comandos en contenedores
+docker-compose exec api-gateway php artisan migrate
+docker-compose exec frontend-pwa npm run build
+```
+
+## 🌐 URLs de Acceso
+
+### Aplicaciones
+- **Frontend PWA**: http://localhost:3000
+- **API Gateway**: http://localhost:8000
+- **Documentación API**: http://localhost:8000/api/documentation
+
+### Herramientas de Administración
+- **phpMyAdmin**: http://localhost:8080
+  - Usuario: `root`
+  - Contraseña: `rootpassword`
+- **Redis Commander**: http://localhost:8081
+
+### APIs de Microservicios
+- **Auth Service**: http://localhost:8001
+- **Financial Service**: http://localhost:8002
+- **Sports Service**: http://localhost:8003
+- **Notification Service**: http://localhost:8004
+- **Medical Service**: http://localhost:8005
+- **Payroll Service**: http://localhost:8006
+- **Report Service**: http://localhost:8007
+- **Calendar Service**: http://localhost:8008
+- **Customization Service**: http://localhost:8009
+
+## 📁 Estructura del Proyecto
+
+```
+wl-school/
+├── api-gateway/              # Servicio API Gateway
+├── auth-service/             # Servicio de Autenticación
+├── financial-service/        # Servicio Financiero
+├── sports-service/           # Servicio Deportivo
+├── notification-service/     # Servicio de Notificaciones
+├── medical-service/          # Servicio Médico
+├── payroll-service/          # Servicio de Nómina
+├── report-service/           # Servicio de Reportes
+├── calendar-service/         # Servicio de Calendario
+├── customization-service/    # Servicio de Personalización
+├── frontend-pwa/             # Frontend PWA
+├── nginx/                    # Configuración de Nginx
+│   ├── nginx.conf
+│   ├── wl-school.conf
+│   └── ssl/
+├── scripts/                  # Scripts de automatización
+│   ├── setup.sh
+│   ├── dev.sh
+│   └── reset.sh
+├── storage/                  # Almacenamiento y logs
+│   └── logs/
+├── database/                 # Inicialización de BD
+│   └── init/
+├── docker-compose.yml        # Configuración de Docker
+├── .env.example             # Variables de entorno
+├── Makefile                 # Comandos simplificados
+└── README.md               # Este archivo
+```
+
+## 🔧 Configuración
+
+### Variables de Entorno
+
+El archivo `.env` contiene todas las configuraciones necesarias:
+
+```bash
+# Aplicación
+APP_NAME="WL-School"
+APP_ENV=local
+APP_DEBUG=true
+APP_URL=http://localhost
+
+# Base de datos
+DB_CONNECTION=mysql
+DB_HOST=mysql-gateway
+DB_PORT=3306
+DB_DATABASE=wl_school_gateway
+DB_USERNAME=root
+DB_PASSWORD=rootpassword
+
+# Redis
+REDIS_HOST=redis
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+
+# JWT
+JWT_SECRET=your-jwt-secret-key
+JWT_TTL=60
+
+# Más configuraciones...
+```
+
+### Personalización por Servicio
+
+Cada microservicio puede tener su propia configuración específica en su directorio correspondiente.
+
+## 🧪 Testing
+
+```bash
+# Ejecutar todos los tests
+make test
+
+# Ejecutar tests de un servicio específico
+make test-auth-service
+
+# Ejecutar tests con cobertura
+docker-compose exec auth-service php artisan test --coverage
+```
+
+## 📊 Monitoreo y Logs
+
+### Ver Logs
+
+```bash
+# Logs de todos los servicios
+make logs
+
+# Logs de un servicio específico
+make logs-api-gateway
+
+# Logs en tiempo real
+docker-compose logs -f api-gateway
+```
+
+### Verificar Salud
+
+```bash
+# Verificar salud de todos los servicios
+make health
+
+# Verificar estado de contenedores
+make status
+```
+
+## 🔒 Seguridad
+
+### Autenticación
+- JWT para autenticación de APIs
+- OAuth2 para integraciones externas
+- Roles y permisos granulares
+
+### Comunicación
+- HTTPS en producción
+- Comunicación interna segura entre microservicios
+- Rate limiting en API Gateway
+
+### Base de Datos
+- Conexiones encriptadas
+- Respaldos automáticos
+- Separación de datos por servicio
+
+## 🚀 Despliegue
+
+### Desarrollo
+```bash
+make dev
+```
+
+### Producción
+```bash
+# Construir para producción
+make prod-build
+
+# Desplegar
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+## 🤝 Contribución
+
+1. Fork el proyecto
+2. Crear una rama para tu feature (`git checkout -b feature/AmazingFeature`)
+3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
+4. Push a la rama (`git push origin feature/AmazingFeature`)
+5. Abrir un Pull Request
+
+### Estándares de Código
+
+- **PHP**: PSR-12
+- **JavaScript**: ESLint + Prettier
+- **Commits**: Conventional Commits
+- **Tests**: Cobertura mínima del 80%
+
+## 📝 Documentación
+
+- [Documentación de API](http://localhost:8000/api/documentation)
+- [Guía de Desarrollo](./docs/development.md)
+- [Arquitectura](./docs/architecture.md)
+- [Despliegue](./docs/deployment.md)
+
+## 🐛 Solución de Problemas
+
+### Problemas Comunes
+
+**Error de conexión a la base de datos**
+```bash
+# Verificar que los contenedores estén ejecutándose
+make status
+
+# Reiniciar servicios de base de datos
+docker-compose restart mysql-gateway mysql-auth
+```
+
+**Puerto ya en uso**
+```bash
+# Verificar qué proceso está usando el puerto
+lsof -i :8000
+
+# Detener todos los servicios
+make stop
+```
+
+**Problemas de permisos**
+```bash
+# Arreglar permisos de storage
+sudo chown -R $USER:$USER storage/
+chmod -R 755 storage/
+```
+
+### Reset Completo
+
+```bash
+# Reset completo del entorno
+make reset
+
+# Configuración desde cero
+make setup
+```
+
+## 📞 Soporte
+
+- **Issues**: [GitHub Issues](https://github.com/Jkrlos982/wl-school/issues)
+- **Documentación**: [Wiki del Proyecto](https://github.com/Jkrlos982/wl-school/wiki)
+- **Email**: support@wl-school.com
+
+## 📄 Licencia
+
+Este proyecto está bajo la Licencia MIT. Ver el archivo [LICENSE](LICENSE) para más detalles.
+
+## 🙏 Agradecimientos
+
+- Laravel Framework
+- React.js
+- Docker
+- Nginx
+- MySQL
+- Redis
+
+---
+
+**Desarrollado con ❤️ para la comunidad educativa**
+
+*WL-School - Transformando la educación a través de la tecnología*
 
 ### ✨ Características Principales
 

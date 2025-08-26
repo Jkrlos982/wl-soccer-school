@@ -1,0 +1,1120 @@
+name: 🧪 Comprehensive Testing Suite
+
+on:
+  push:
+    branches: [ main, develop, 'feature/*', 'hotfix/*' ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of tests to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - unit
+          - integration
+          - e2e
+          - performance
+          - security
+      environment:
+        description: 'Environment to test against'
+        required: false
+        default: 'testing'
+        type: choice
+        options:
+          - testing
+          - staging
+          - development
+      parallel_jobs:
+        description: 'Number of parallel test jobs'
+        required: false
+        default: '4'
+        type: string
+
+env:
+  COMPOSER_CACHE_DIR: ~/.composer/cache
+  NODE_CACHE_DIR: ~/.npm
+  MYSQL_ROOT_PASSWORD: root_password_test
+  REDIS_PASSWORD: redis_password_test
+  TEST_DB_PREFIX: wl_school_test_
+  PARALLEL_JOBS: ${{ github.event.inputs.parallel_jobs || '4' }}
+
+jobs:
+  # Detectar cambios y servicios afectados
+  detect-changes:
+    name: 🔍 Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      microservices: ${{ steps.changes.outputs.microservices }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      infrastructure: ${{ steps.changes.outputs.infrastructure }}
+      test_type: ${{ steps.changes.outputs.test_type }}
+      environment: ${{ steps.changes.outputs.environment }}
+      run_unit_tests: ${{ steps.changes.outputs.run_unit_tests }}
+      run_integration_tests: ${{ steps.changes.outputs.run_integration_tests }}
+      run_e2e_tests: ${{ steps.changes.outputs.run_e2e_tests }}
+      run_performance_tests: ${{ steps.changes.outputs.run_performance_tests }}
+      run_security_tests: ${{ steps.changes.outputs.run_security_tests }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Detect changes and determine test strategy
+        id: changes
+        run: |
+          # Determinar tipo de test y ambiente
+          test_type="${{ github.event.inputs.test_type || 'all' }}"
+          environment="${{ github.event.inputs.environment || 'testing' }}"
+          
+          echo "test_type=$test_type" >> $GITHUB_OUTPUT
+          echo "environment=$environment" >> $GITHUB_OUTPUT
+          
+          # Detectar cambios en microservicios
+          microservices_changed="false"
+          microservices_list="[]"
+          
+          if git diff --name-only HEAD~1 HEAD | grep -E '^(api-gateway|auth-service|financial-service|sports-service|notification-service|medical-service|payroll-service|report-service|customization-service|calendar-service)/' > /dev/null; then
+            microservices_changed="true"
+            
+            # Crear lista de microservicios cambiados
+            changed_services=$(git diff --name-only HEAD~1 HEAD | grep -E '^(api-gateway|auth-service|financial-service|sports-service|notification-service|medical-service|payroll-service|report-service|customization-service|calendar-service)/' | cut -d'/' -f1 | sort -u)
+            
+            microservices_array="["
+            for service in $changed_services; do
+              if [ "$microservices_array" != "[" ]; then
+                microservices_array="$microservices_array,"
+              fi
+              microservices_array="$microservices_array\"$service\""
+            done
+            microservices_array="$microservices_array]"
+            microservices_list="$microservices_array"
+          fi
+          
+          echo "microservices=$microservices_list" >> $GITHUB_OUTPUT
+          
+          # Detectar cambios en frontend
+          frontend_changed="false"
+          if git diff --name-only HEAD~1 HEAD | grep -E '^frontend-pwa/' > /dev/null; then
+            frontend_changed="true"
+          fi
+          echo "frontend=$frontend_changed" >> $GITHUB_OUTPUT
+          
+          # Detectar cambios en infraestructura
+          infrastructure_changed="false"
+          if git diff --name-only HEAD~1 HEAD | grep -E '^(docker/|.github/|scripts/|Makefile|docker-compose)' > /dev/null; then
+            infrastructure_changed="true"
+          fi
+          echo "infrastructure=$infrastructure_changed" >> $GITHUB_OUTPUT
+          
+          # Determinar qué tipos de test ejecutar
+          run_unit_tests="false"
+          run_integration_tests="false"
+          run_e2e_tests="false"
+          run_performance_tests="false"
+          run_security_tests="false"
+          
+          case $test_type in
+            "all")
+              run_unit_tests="true"
+              run_integration_tests="true"
+              run_e2e_tests="true"
+              run_performance_tests="true"
+              run_security_tests="true"
+              ;;
+            "unit")
+              run_unit_tests="true"
+              ;;
+            "integration")
+              run_integration_tests="true"
+              ;;
+            "e2e")
+              run_e2e_tests="true"
+              ;;
+            "performance")
+              run_performance_tests="true"
+              ;;
+            "security")
+              run_security_tests="true"
+              ;;
+          esac
+          
+          echo "run_unit_tests=$run_unit_tests" >> $GITHUB_OUTPUT
+          echo "run_integration_tests=$run_integration_tests" >> $GITHUB_OUTPUT
+          echo "run_e2e_tests=$run_e2e_tests" >> $GITHUB_OUTPUT
+          echo "run_performance_tests=$run_performance_tests" >> $GITHUB_OUTPUT
+          echo "run_security_tests=$run_security_tests" >> $GITHUB_OUTPUT
+          
+          echo "🔍 Detection Results:"
+          echo "- Test Type: $test_type"
+          echo "- Environment: $environment"
+          echo "- Microservices Changed: $microservices_changed ($microservices_list)"
+          echo "- Frontend Changed: $frontend_changed"
+          echo "- Infrastructure Changed: $infrastructure_changed"
+          echo "- Unit Tests: $run_unit_tests"
+          echo "- Integration Tests: $run_integration_tests"
+          echo "- E2E Tests: $run_e2e_tests"
+          echo "- Performance Tests: $run_performance_tests"
+          echo "- Security Tests: $run_security_tests"
+
+  # Configurar entorno de testing
+  setup-test-environment:
+    name: 🛠️ Setup Test Environment
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: wl_school_test
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+      
+      redis:
+        image: redis:7-alpine
+        env:
+          REDIS_PASSWORD: ${{ env.REDIS_PASSWORD }}
+        ports:
+          - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, pdo_mysql, redis
+          coverage: xdebug
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.COMPOSER_CACHE_DIR }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+      
+      - name: Cache Node dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NODE_CACHE_DIR }}
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-
+      
+      - name: Create test databases
+        run: |
+          # Crear bases de datos para cada microservicio
+          services=("auth" "financial" "sports" "notification" "medical" "payroll" "report" "customization" "calendar")
+          
+          for service in "${services[@]}"; do
+            mysql -h 127.0.0.1 -u root -p${{ env.MYSQL_ROOT_PASSWORD }} -e "CREATE DATABASE IF NOT EXISTS ${TEST_DB_PREFIX}${service};"
+            echo "✅ Created test database: ${TEST_DB_PREFIX}${service}"
+          done
+      
+      - name: Verify services
+        run: |
+          echo "🔍 Verifying test services..."
+          
+          # Verificar MySQL
+          mysql -h 127.0.0.1 -u root -p${{ env.MYSQL_ROOT_PASSWORD }} -e "SHOW DATABASES;" | grep wl_school_test
+          echo "✅ MySQL is ready"
+          
+          # Verificar Redis
+          redis-cli -h 127.0.0.1 ping
+          echo "✅ Redis is ready"
+          
+          echo "🎉 Test environment setup completed successfully!"
+
+  # Tests unitarios para microservicios Laravel
+  unit-tests-microservices:
+    name: 🧪 Unit Tests - Microservices
+    needs: [detect-changes, setup-test-environment]
+    if: needs.detect-changes.outputs.run_unit_tests == 'true' && needs.detect-changes.outputs.microservices != '[]'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.microservices) }}
+        php-version: ['8.2']
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+      
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, pdo_mysql, redis
+          coverage: xdebug
+      
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.COMPOSER_CACHE_DIR }}
+          key: ${{ runner.os }}-composer-${{ matrix.service }}-${{ hashFiles(format('{0}/composer.lock', matrix.service)) }}
+          restore-keys: |
+            ${{ runner.os }}-composer-${{ matrix.service }}-
+            ${{ runner.os }}-composer-
+      
+      - name: Install dependencies
+        working-directory: ${{ matrix.service }}
+        run: |
+          composer install --prefer-dist --no-progress --no-suggest --optimize-autoloader
+          
+      - name: Setup environment
+        working-directory: ${{ matrix.service }}
+        run: |
+          # Copiar archivo de configuración de testing
+          cp .env.testing .env
+          
+          # Configurar base de datos de testing
+          sed -i "s/DB_DATABASE=.*/DB_DATABASE=${TEST_DB_PREFIX}$(echo ${{ matrix.service }} | sed 's/-service//')/" .env
+          sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${{ env.MYSQL_ROOT_PASSWORD }}/" .env
+          
+          # Generar clave de aplicación
+          php artisan key:generate
+          
+          # Crear base de datos si no existe
+          service_db=$(echo ${{ matrix.service }} | sed 's/-service//')
+          mysql -h 127.0.0.1 -u root -p${{ env.MYSQL_ROOT_PASSWORD }} -e "CREATE DATABASE IF NOT EXISTS ${TEST_DB_PREFIX}${service_db};"
+      
+      - name: Run database migrations
+        working-directory: ${{ matrix.service }}
+        run: |
+          php artisan migrate --force
+          php artisan db:seed --force
+      
+      - name: Run unit tests
+        working-directory: ${{ matrix.service }}
+        run: |
+          echo "🧪 Running unit tests for ${{ matrix.service }}..."
+          
+          # Ejecutar tests con cobertura
+          php artisan test --testsuite=Unit --coverage-clover=coverage.xml --coverage-html=coverage-html --parallel --processes=${{ env.PARALLEL_JOBS }}
+          
+          # Generar reporte de cobertura
+          echo "📊 Code Coverage Summary for ${{ matrix.service }}:"
+          php artisan test --testsuite=Unit --coverage-text
+      
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.service }}-unit
+          path: |
+            ${{ matrix.service }}/coverage.xml
+            ${{ matrix.service }}/coverage-html/
+          retention-days: 30
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.service }}-unit
+          path: ${{ matrix.service }}/storage/logs/
+          retention-days: 7
+
+  # Tests unitarios para frontend React
+  unit-tests-frontend:
+    name: 🧪 Unit Tests - Frontend
+    needs: [detect-changes, setup-test-environment]
+    if: needs.detect-changes.outputs.run_unit_tests == 'true' && needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: ['20']
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: frontend-pwa/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: frontend-pwa
+        run: |
+          npm ci --prefer-offline --no-audit
+      
+      - name: Run linting
+        working-directory: frontend-pwa
+        run: |
+          echo "🔍 Running ESLint..."
+          npm run lint
+          
+          echo "🎨 Running Prettier check..."
+          npm run format:check
+      
+      - name: Run type checking
+        working-directory: frontend-pwa
+        run: |
+          echo "🔍 Running TypeScript type checking..."
+          npm run type-check
+      
+      - name: Run unit tests
+        working-directory: frontend-pwa
+        run: |
+          echo "🧪 Running unit tests for frontend..."
+          
+          # Ejecutar tests con cobertura
+          npm run test:unit -- --coverage --watchAll=false --maxWorkers=${{ env.PARALLEL_JOBS }}
+      
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-frontend-unit
+          path: |
+            frontend-pwa/coverage/
+          retention-days: 30
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-frontend-unit
+          path: frontend-pwa/test-results/
+          retention-days: 7
+
+  # Tests de integración
+  integration-tests:
+    name: 🔗 Integration Tests
+    needs: [detect-changes, setup-test-environment]
+    if: needs.detect-changes.outputs.run_integration_tests == 'true'
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+      
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, pdo_mysql, redis
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Start services with Docker Compose
+        run: |
+          echo "🚀 Starting integration test environment..."
+          
+          # Copiar archivo de configuración para testing
+          cp docker-compose.testing.yml docker-compose.override.yml
+          
+          # Iniciar servicios
+          docker-compose up -d mysql redis nginx
+          
+          # Esperar a que los servicios estén listos
+          echo "⏳ Waiting for services to be ready..."
+          sleep 30
+          
+          # Verificar servicios
+          docker-compose ps
+      
+      - name: Setup microservices for integration testing
+        run: |
+          services=("auth-service" "financial-service" "sports-service" "notification-service" "medical-service" "payroll-service" "report-service" "customization-service" "calendar-service")
+          
+          for service in "${services[@]}"; do
+            if [ -d "$service" ]; then
+              echo "🔧 Setting up $service for integration testing..."
+              
+              cd "$service"
+              
+              # Instalar dependencias
+              composer install --no-dev --optimize-autoloader
+              
+              # Configurar ambiente
+              cp .env.testing .env
+              php artisan key:generate
+              
+              # Ejecutar migraciones
+              php artisan migrate --force
+              php artisan db:seed --force
+              
+              cd ..
+            fi
+          done
+      
+      - name: Setup frontend for integration testing
+        working-directory: frontend-pwa
+        run: |
+          echo "🔧 Setting up frontend for integration testing..."
+          
+          # Instalar dependencias
+          npm ci
+          
+          # Construir aplicación para testing
+          npm run build:test
+      
+      - name: Run API integration tests
+        run: |
+          echo "🔗 Running API integration tests..."
+          
+          # Ejecutar tests de integración de APIs
+          cd api-gateway
+          php artisan test --testsuite=Integration --parallel --processes=${{ env.PARALLEL_JOBS }}
+      
+      - name: Run database integration tests
+        run: |
+          echo "🗄️ Running database integration tests..."
+          
+          # Test de conectividad entre microservicios y bases de datos
+          services=("auth-service" "financial-service" "sports-service")
+          
+          for service in "${services[@]}"; do
+            if [ -d "$service" ]; then
+              echo "Testing database integration for $service..."
+              cd "$service"
+              php artisan test --testsuite=Database
+              cd ..
+            fi
+          done
+      
+      - name: Run frontend-backend integration tests
+        working-directory: frontend-pwa
+        run: |
+          echo "🌐 Running frontend-backend integration tests..."
+          
+          # Ejecutar tests de integración frontend-backend
+          npm run test:integration
+      
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: |
+            **/storage/logs/
+            frontend-pwa/test-results/
+          retention-days: 7
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up integration test environment..."
+          docker-compose down -v
+
+  # Tests end-to-end
+  e2e-tests:
+    name: 🎭 End-to-End Tests
+    needs: [detect-changes, setup-test-environment]
+    if: needs.detect-changes.outputs.run_e2e_tests == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, pdo_mysql, redis
+      
+      - name: Start full application stack
+        run: |
+          echo "🚀 Starting full application stack for E2E testing..."
+          
+          # Usar configuración de E2E
+          cp docker-compose.e2e.yml docker-compose.override.yml
+          
+          # Iniciar todos los servicios
+          docker-compose up -d
+          
+          # Esperar a que todos los servicios estén listos
+          echo "⏳ Waiting for all services to be ready..."
+          sleep 60
+          
+          # Verificar que todos los servicios estén funcionando
+          docker-compose ps
+          
+          # Health check de servicios críticos
+          curl -f http://localhost:8080/health || exit 1
+          curl -f http://localhost:3000 || exit 1
+      
+      - name: Install Playwright
+        working-directory: frontend-pwa
+        run: |
+          npm ci
+          npx playwright install --with-deps
+      
+      - name: Run E2E tests
+        working-directory: frontend-pwa
+        run: |
+          echo "🎭 Running End-to-End tests..."
+          
+          # Ejecutar tests E2E con Playwright
+          npx playwright test --workers=${{ env.PARALLEL_JOBS }}
+      
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: |
+            frontend-pwa/test-results/
+            frontend-pwa/playwright-report/
+          retention-days: 7
+      
+      - name: Upload E2E videos and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-videos-screenshots
+          path: |
+            frontend-pwa/test-results/
+          retention-days: 7
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up E2E test environment..."
+          docker-compose down -v
+
+  # Tests de rendimiento
+  performance-tests:
+    name: ⚡ Performance Tests
+    needs: [detect-changes, setup-test-environment]
+    if: needs.detect-changes.outputs.run_performance_tests == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, pdo_mysql, redis
+      
+      - name: Start application for performance testing
+        run: |
+          echo "🚀 Starting application for performance testing..."
+          
+          # Usar configuración optimizada para performance
+          cp docker-compose.performance.yml docker-compose.override.yml
+          
+          # Iniciar servicios
+          docker-compose up -d
+          
+          # Esperar a que los servicios estén listos
+          sleep 45
+          
+          # Verificar servicios
+          docker-compose ps
+      
+      - name: Install performance testing tools
+        run: |
+          # Instalar Apache Bench
+          sudo apt-get update
+          sudo apt-get install -y apache2-utils
+          
+          # Instalar Artillery para tests de carga
+          npm install -g artillery@latest
+          
+          # Instalar Lighthouse CLI
+          npm install -g lighthouse
+      
+      - name: Run API performance tests
+        run: |
+          echo "⚡ Running API performance tests..."
+          
+          # Test de carga básico con Apache Bench
+          echo "Testing API Gateway performance..."
+          ab -n 1000 -c 10 -g api_performance.tsv http://localhost:8080/api/health
+          
+          # Test de carga con Artillery
+          echo "Running load tests with Artillery..."
+          artillery run scripts/performance/api-load-test.yml --output api-load-results.json
+          
+          # Generar reporte
+          artillery report api-load-results.json --output api-load-report.html
+      
+      - name: Run frontend performance tests
+        working-directory: frontend-pwa
+        run: |
+          echo "⚡ Running frontend performance tests..."
+          
+          # Construir aplicación optimizada
+          npm run build
+          
+          # Servir aplicación
+          npm run preview &
+          PREVIEW_PID=$!
+          
+          # Esperar a que el servidor esté listo
+          sleep 10
+          
+          # Ejecutar Lighthouse
+          lighthouse http://localhost:4173 --output=html --output-path=lighthouse-report.html --chrome-flags="--headless --no-sandbox"
+          
+          # Detener servidor
+          kill $PREVIEW_PID
+      
+      - name: Run database performance tests
+        run: |
+          echo "🗄️ Running database performance tests..."
+          
+          # Test de rendimiento de base de datos
+          services=("auth-service" "financial-service")
+          
+          for service in "${services[@]}"; do
+            if [ -d "$service" ]; then
+              echo "Testing database performance for $service..."
+              cd "$service"
+              
+              # Ejecutar tests de rendimiento específicos
+              php artisan test --testsuite=Performance
+              
+              cd ..
+            fi
+          done
+      
+      - name: Upload performance test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-test-results
+          path: |
+            api_performance.tsv
+            api-load-results.json
+            api-load-report.html
+            frontend-pwa/lighthouse-report.html
+          retention-days: 30
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up performance test environment..."
+          docker-compose down -v
+
+  # Tests de seguridad
+  security-tests:
+    name: 🔒 Security Tests
+    needs: [detect-changes, setup-test-environment]
+    if: needs.detect-changes.outputs.run_security_tests == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, pdo_mysql, redis
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install security testing tools
+        run: |
+          # Instalar herramientas de seguridad
+          sudo apt-get update
+          sudo apt-get install -y nmap nikto
+          
+          # Instalar OWASP ZAP
+          wget -q https://github.com/zaproxy/zaproxy/releases/download/v2.14.0/ZAP_2_14_0_unix.sh
+          chmod +x ZAP_2_14_0_unix.sh
+          sudo ./ZAP_2_14_0_unix.sh -q
+      
+      - name: Start application for security testing
+        run: |
+          echo "🚀 Starting application for security testing..."
+          
+          # Usar configuración de seguridad
+          cp docker-compose.security.yml docker-compose.override.yml
+          
+          # Iniciar servicios
+          docker-compose up -d
+          
+          # Esperar a que los servicios estén listos
+          sleep 45
+      
+      - name: Run dependency security scans
+        run: |
+          echo "🔍 Running dependency security scans..."
+          
+          # Scan de dependencias PHP
+          services=("auth-service" "financial-service" "api-gateway")
+          
+          for service in "${services[@]}"; do
+            if [ -d "$service" ]; then
+              echo "Scanning PHP dependencies for $service..."
+              cd "$service"
+              
+              # Composer audit
+              composer audit --format=json > ../security-audit-$service.json || true
+              
+              cd ..
+            fi
+          done
+          
+          # Scan de dependencias Node.js
+          if [ -d "frontend-pwa" ]; then
+            echo "Scanning Node.js dependencies for frontend..."
+            cd frontend-pwa
+            
+            # npm audit
+            npm audit --audit-level=moderate --json > ../security-audit-frontend.json || true
+            
+            cd ..
+          fi
+      
+      - name: Run static security analysis
+        run: |
+          echo "🔍 Running static security analysis..."
+          
+          # Análisis estático con PHPStan (reglas de seguridad)
+          services=("auth-service" "financial-service")
+          
+          for service in "${services[@]}"; do
+            if [ -d "$service" ]; then
+              echo "Running security analysis for $service..."
+              cd "$service"
+              
+              # PHPStan con reglas de seguridad
+              ./vendor/bin/phpstan analyse --level=8 --configuration=phpstan-security.neon --error-format=json > ../security-analysis-$service.json || true
+              
+              cd ..
+            fi
+          done
+      
+      - name: Run web application security tests
+        run: |
+          echo "🌐 Running web application security tests..."
+          
+          # OWASP ZAP baseline scan
+          /opt/zaproxy/zap.sh -cmd -quickurl http://localhost:8080 -quickout zap-baseline-report.html
+          
+          # Nikto web scanner
+          nikto -h http://localhost:8080 -Format htm -output nikto-report.html
+      
+      - name: Run network security tests
+        run: |
+          echo "🔒 Running network security tests..."
+          
+          # Port scan
+          nmap -sV -O localhost > nmap-scan-results.txt
+          
+          # SSL/TLS test (si HTTPS está habilitado)
+          if curl -k https://localhost:8443 2>/dev/null; then
+            echo "Testing SSL/TLS configuration..."
+            # Aquí se podría usar testssl.sh u otra herramienta
+          fi
+      
+      - name: Upload security test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-test-results
+          path: |
+            security-audit-*.json
+            security-analysis-*.json
+            zap-baseline-report.html
+            nikto-report.html
+            nmap-scan-results.txt
+          retention-days: 30
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up security test environment..."
+          docker-compose down -v
+
+  # Generar reporte consolidado de testing
+  generate-test-report:
+    name: 📊 Generate Test Report
+    needs: [detect-changes, unit-tests-microservices, unit-tests-frontend, integration-tests, e2e-tests, performance-tests, security-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download all test artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: test-artifacts
+      
+      - name: Generate consolidated test report
+        run: |
+          echo "📊 Generating consolidated test report..."
+          
+          # Crear directorio para el reporte
+          mkdir -p test-report
+          
+          # Información general
+          cat > test-report/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>WL School - Test Report</title>
+              <style>
+                  body { font-family: Arial, sans-serif; margin: 20px; }
+                  .header { background: #f4f4f4; padding: 20px; border-radius: 5px; }
+                  .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+                  .success { background: #d4edda; border-color: #c3e6cb; }
+                  .warning { background: #fff3cd; border-color: #ffeaa7; }
+                  .error { background: #f8d7da; border-color: #f5c6cb; }
+                  .metric { display: inline-block; margin: 10px; padding: 10px; background: #f8f9fa; border-radius: 3px; }
+              </style>
+          </head>
+          <body>
+              <div class="header">
+                  <h1>🧪 WL School - Comprehensive Test Report</h1>
+                  <p><strong>Generated:</strong> $(date -u)</p>
+                  <p><strong>Commit:</strong> ${{ github.sha }}</p>
+                  <p><strong>Branch:</strong> ${{ github.ref_name }}</p>
+                  <p><strong>Environment:</strong> ${{ needs.detect-changes.outputs.environment }}</p>
+              </div>
+          EOF
+          
+          # Resumen ejecutivo
+          unit_microservices_status="${{ needs.unit-tests-microservices.result }}"
+          unit_frontend_status="${{ needs.unit-tests-frontend.result }}"
+          integration_status="${{ needs.integration-tests.result }}"
+          e2e_status="${{ needs.e2e-tests.result }}"
+          performance_status="${{ needs.performance-tests.result }}"
+          security_status="${{ needs.security-tests.result }}"
+          
+          # Determinar estado general
+          overall_status="success"
+          if [[ "$unit_microservices_status" == "failure" || "$unit_frontend_status" == "failure" || "$integration_status" == "failure" || "$e2e_status" == "failure" ]]; then
+            overall_status="failure"
+          elif [[ "$performance_status" == "failure" || "$security_status" == "failure" ]]; then
+            overall_status="warning"
+          fi
+          
+          # Agregar resumen al reporte
+          cat >> test-report/index.html << EOF
+              <div class="section $overall_status">
+                  <h2>📋 Executive Summary</h2>
+                  <div class="metric"><strong>Overall Status:</strong> $(echo $overall_status | tr '[:lower:]' '[:upper:]')</div>
+                  <div class="metric"><strong>Unit Tests (Microservices):</strong> $(echo $unit_microservices_status | tr '[:lower:]' '[:upper:]')</div>
+                  <div class="metric"><strong>Unit Tests (Frontend):</strong> $(echo $unit_frontend_status | tr '[:lower:]' '[:upper:]')</div>
+                  <div class="metric"><strong>Integration Tests:</strong> $(echo $integration_status | tr '[:lower:]' '[:upper:]')</div>
+                  <div class="metric"><strong>E2E Tests:</strong> $(echo $e2e_status | tr '[:lower:]' '[:upper:]')</div>
+                  <div class="metric"><strong>Performance Tests:</strong> $(echo $performance_status | tr '[:lower:]' '[:upper:]')</div>
+                  <div class="metric"><strong>Security Tests:</strong> $(echo $security_status | tr '[:lower:]' '[:upper:]')</div>
+              </div>
+          EOF
+          
+          # Agregar secciones detalladas
+          cat >> test-report/index.html << 'EOF'
+              <div class="section">
+                  <h2>🧪 Unit Tests</h2>
+                  <p>Unit tests verify individual components and functions in isolation.</p>
+                  <ul>
+                      <li><strong>Microservices:</strong> Laravel PHPUnit tests for business logic</li>
+                      <li><strong>Frontend:</strong> React component tests with Jest and Testing Library</li>
+                  </ul>
+              </div>
+              
+              <div class="section">
+                  <h2>🔗 Integration Tests</h2>
+                  <p>Integration tests verify that different components work together correctly.</p>
+                  <ul>
+                      <li>API endpoint integration</li>
+                      <li>Database connectivity and operations</li>
+                      <li>Frontend-backend communication</li>
+                  </ul>
+              </div>
+              
+              <div class="section">
+                  <h2>🎭 End-to-End Tests</h2>
+                  <p>E2E tests simulate real user interactions with the complete application.</p>
+                  <ul>
+                      <li>User authentication flows</li>
+                      <li>Critical business processes</li>
+                      <li>Cross-browser compatibility</li>
+                  </ul>
+              </div>
+              
+              <div class="section">
+                  <h2>⚡ Performance Tests</h2>
+                  <p>Performance tests ensure the application meets speed and scalability requirements.</p>
+                  <ul>
+                      <li>API response times and throughput</li>
+                      <li>Frontend loading and rendering performance</li>
+                      <li>Database query optimization</li>
+                  </ul>
+              </div>
+              
+              <div class="section">
+                  <h2>🔒 Security Tests</h2>
+                  <p>Security tests identify vulnerabilities and ensure secure coding practices.</p>
+                  <ul>
+                      <li>Dependency vulnerability scanning</li>
+                      <li>Static code security analysis</li>
+                      <li>Web application security testing</li>
+                      <li>Network security assessment</li>
+                  </ul>
+              </div>
+              
+              <div class="section">
+                  <h2>📈 Recommendations</h2>
+                  <ul>
+                      <li>Review failed tests and address underlying issues</li>
+                      <li>Maintain test coverage above 80% for critical components</li>
+                      <li>Regularly update dependencies to address security vulnerabilities</li>
+                      <li>Monitor performance metrics and optimize bottlenecks</li>
+                      <li>Implement additional security measures based on scan results</li>
+                  </ul>
+              </div>
+          </body>
+          </html>
+          EOF
+          
+          echo "✅ Test report generated successfully!"
+      
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-test-report
+          path: test-report/
+          retention-days: 90
+      
+      - name: Create GitHub Step Summary
+        run: |
+          echo "# 🧪 WL School - Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Generated:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.detect-changes.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Estado general
+          unit_microservices_status="${{ needs.unit-tests-microservices.result }}"
+          unit_frontend_status="${{ needs.unit-tests-frontend.result }}"
+          integration_status="${{ needs.integration-tests.result }}"
+          e2e_status="${{ needs.e2e-tests.result }}"
+          performance_status="${{ needs.performance-tests.result }}"
+          security_status="${{ needs.security-tests.result }}"
+          
+          echo "## 📊 Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests (Microservices) | $([ "$unit_microservices_status" = "success" ] && echo "✅ PASSED" || echo "❌ FAILED") | Laravel PHPUnit tests |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests (Frontend) | $([ "$unit_frontend_status" = "success" ] && echo "✅ PASSED" || echo "❌ FAILED") | React component tests |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | $([ "$integration_status" = "success" ] && echo "✅ PASSED" || echo "❌ FAILED") | API and database integration |" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E Tests | $([ "$e2e_status" = "success" ] && echo "✅ PASSED" || echo "❌ FAILED") | Full user workflow tests |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance Tests | $([ "$performance_status" = "success" ] && echo "✅ PASSED" || echo "⚠️ ISSUES") | Load and performance testing |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Tests | $([ "$security_status" = "success" ] && echo "✅ PASSED" || echo "⚠️ ISSUES") | Vulnerability and security scans |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Determinar estado general y agregar recomendaciones
+          overall_status="success"
+          if [[ "$unit_microservices_status" == "failure" || "$unit_frontend_status" == "failure" || "$integration_status" == "failure" || "$e2e_status" == "failure" ]]; then
+            overall_status="failure"
+            echo "## ❌ Critical Issues Detected" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Some critical tests have failed. Please review the test results and fix the issues before proceeding." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          elif [[ "$performance_status" == "failure" || "$security_status" == "failure" ]]; then
+            overall_status="warning"
+            echo "## ⚠️ Performance or Security Issues" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Performance or security tests have identified issues that should be addressed." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ All Tests Passed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All test suites have completed successfully!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "## 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review detailed test reports in the artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "2. Address any failed tests or security vulnerabilities" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor performance metrics and optimize as needed" >> $GITHUB_STEP_SUMMARY
+          echo "4. Update test coverage for new features" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Salir con código de error si hay fallos críticos
+          if [ "$overall_status" = "failure" ]; then
+            echo "💥 Critical test failures detected. Workflow failed."
+            exit 1
+          elif [ "$overall_status" = "warning" ]; then
+            echo "⚠️ Some issues detected but not critical."
+          else
+            echo "✅ All tests completed successfully!"
+          fi

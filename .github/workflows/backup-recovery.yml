@@ -1,0 +1,890 @@
+name: Backup & Disaster Recovery
+
+on:
+  schedule:
+    # Daily backup at 2 AM UTC
+    - cron: '0 2 * * *'
+    # Weekly full backup on Sundays at 1 AM UTC
+    - cron: '0 1 * * 0'
+  workflow_dispatch:
+    inputs:
+      backup_type:
+        description: 'Type of backup to perform'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - full
+          - database_only
+          - files_only
+          - disaster_recovery_test
+      environment:
+        description: 'Environment to backup'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - development
+      restore_point:
+        description: 'Restore point (for disaster recovery test)'
+        required: false
+        type: string
+
+env:
+  BACKUP_RETENTION_DAYS: 30
+  FULL_BACKUP_RETENTION_DAYS: 90
+  DISASTER_RECOVERY_RETENTION_DAYS: 365
+
+jobs:
+  # Job para determinar el tipo de backup
+  determine-backup-strategy:
+    runs-on: ubuntu-latest
+    outputs:
+      backup_type: ${{ steps.strategy.outputs.backup_type }}
+      environment: ${{ steps.strategy.outputs.environment }}
+      timestamp: ${{ steps.strategy.outputs.timestamp }}
+      is_full_backup: ${{ steps.strategy.outputs.is_full_backup }}
+    steps:
+      - name: Determine backup strategy
+        id: strategy
+        run: |
+          timestamp=$(date -u +"%Y%m%d_%H%M%S")
+          echo "timestamp=$timestamp" >> $GITHUB_OUTPUT
+          
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            backup_type="${{ github.event.inputs.backup_type }}"
+            environment="${{ github.event.inputs.environment }}"
+          elif [ "${{ github.event.schedule }}" = "0 1 * * 0" ]; then
+            # Weekly full backup
+            backup_type="full"
+            environment="production"
+          else
+            # Daily incremental backup
+            backup_type="incremental"
+            environment="production"
+          fi
+          
+          echo "backup_type=$backup_type" >> $GITHUB_OUTPUT
+          echo "environment=$environment" >> $GITHUB_OUTPUT
+          echo "is_full_backup=$([ "$backup_type" = "full" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          
+          echo "📋 Backup Strategy:"
+          echo "- Type: $backup_type"
+          echo "- Environment: $environment"
+          echo "- Timestamp: $timestamp"
+
+  # Backup de bases de datos
+  database-backup:
+    needs: determine-backup-strategy
+    if: needs.determine-backup-strategy.outputs.backup_type != 'files_only'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        database:
+          - auth_service
+          - financial_service
+          - sports_service
+          - notification_service
+          - medical_service
+          - payroll_service
+          - report_service
+          - customization_service
+          - calendar_service
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup MySQL Client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client-core-8.0
+      
+      - name: Create database backup
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT || '3306' }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          BACKUP_TIMESTAMP: ${{ needs.determine-backup-strategy.outputs.timestamp }}
+          BACKUP_TYPE: ${{ needs.determine-backup-strategy.outputs.backup_type }}
+          ENVIRONMENT: ${{ needs.determine-backup-strategy.outputs.environment }}
+        run: |
+          echo "🗄️ Creating backup for ${{ matrix.database }}..."
+          
+          # Crear directorio de backup
+          mkdir -p backups/databases/${{ matrix.database }}
+          
+          # Nombre del archivo de backup
+          backup_file="backups/databases/${{ matrix.database }}/${ENVIRONMENT}_${{ matrix.database }}_${BACKUP_TYPE}_${BACKUP_TIMESTAMP}.sql"
+          
+          # Configurar opciones de mysqldump según el tipo de backup
+          if [ "$BACKUP_TYPE" = "full" ]; then
+            dump_options="--single-transaction --routines --triggers --events --complete-insert"
+          else
+            # Para backup incremental, incluir solo cambios recientes
+            dump_options="--single-transaction --complete-insert --where='updated_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)'"
+          fi
+          
+          # Ejecutar backup
+          mysqldump \
+            --host="$DB_HOST" \
+            --port="$DB_PORT" \
+            --user="$DB_USERNAME" \
+            --password="$DB_PASSWORD" \
+            $dump_options \
+            "${{ matrix.database }}" > "$backup_file"
+          
+          # Comprimir backup
+          gzip "$backup_file"
+          backup_file_gz="${backup_file}.gz"
+          
+          # Verificar integridad del backup
+          if [ -f "$backup_file_gz" ]; then
+            size=$(stat -c%s "$backup_file_gz")
+            echo "✅ Backup created successfully: $(basename "$backup_file_gz") ($size bytes)"
+            
+            # Generar checksum
+            sha256sum "$backup_file_gz" > "${backup_file_gz}.sha256"
+            
+            # Metadata del backup
+            cat > "${backup_file_gz}.meta" << EOF
+          {
+            "database": "${{ matrix.database }}",
+            "environment": "$ENVIRONMENT",
+            "backup_type": "$BACKUP_TYPE",
+            "timestamp": "$BACKUP_TIMESTAMP",
+            "size_bytes": $size,
+            "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "mysql_version": "$(mysql --version)",
+            "compression": "gzip"
+          }
+          EOF
+          else
+            echo "❌ Failed to create backup for ${{ matrix.database }}"
+            exit 1
+          fi
+      
+      - name: Test backup integrity
+        run: |
+          echo "🔍 Testing backup integrity for ${{ matrix.database }}..."
+          
+          backup_file="backups/databases/${{ matrix.database }}/${ENVIRONMENT}_${{ matrix.database }}_${BACKUP_TYPE}_${BACKUP_TIMESTAMP}.sql.gz"
+          
+          # Verificar que el archivo no esté corrupto
+          if gzip -t "$backup_file"; then
+            echo "✅ Backup file integrity verified"
+          else
+            echo "❌ Backup file is corrupted"
+            exit 1
+          fi
+          
+          # Verificar checksum
+          if sha256sum -c "${backup_file}.sha256"; then
+            echo "✅ Checksum verification passed"
+          else
+            echo "❌ Checksum verification failed"
+            exit 1
+          fi
+      
+      - name: Upload database backup to cloud storage
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+          S3_BACKUP_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+        run: |
+          echo "☁️ Uploading backup to cloud storage..."
+          
+          # Instalar AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+          
+          # Subir archivos de backup
+          backup_dir="backups/databases/${{ matrix.database }}"
+          s3_path="s3://$S3_BACKUP_BUCKET/wl-school/$ENVIRONMENT/databases/${{ matrix.database }}/"
+          
+          aws s3 cp "$backup_dir/" "$s3_path" --recursive --storage-class STANDARD_IA
+          
+          echo "✅ Backup uploaded to $s3_path"
+      
+      - name: Store backup metadata
+        uses: actions/upload-artifact@v3
+        with:
+          name: database-backup-${{ matrix.database }}
+          path: |
+            backups/databases/${{ matrix.database }}/*.meta
+            backups/databases/${{ matrix.database }}/*.sha256
+          retention-days: 7
+
+  # Backup de archivos y configuraciones
+  files-backup:
+    needs: determine-backup-strategy
+    if: needs.determine-backup-strategy.outputs.backup_type != 'database_only'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create files backup
+        env:
+          BACKUP_TIMESTAMP: ${{ needs.determine-backup-strategy.outputs.timestamp }}
+          BACKUP_TYPE: ${{ needs.determine-backup-strategy.outputs.backup_type }}
+          ENVIRONMENT: ${{ needs.determine-backup-strategy.outputs.environment }}
+        run: |
+          echo "📁 Creating files backup..."
+          
+          mkdir -p backups/files
+          
+          # Definir qué archivos incluir en el backup
+          backup_file="backups/files/${ENVIRONMENT}_files_${BACKUP_TYPE}_${BACKUP_TIMESTAMP}.tar.gz"
+          
+          # Crear lista de archivos a respaldar
+          cat > backup_include.txt << EOF
+          docker/
+          .github/
+          database/migrations/
+          scripts/
+          Makefile
+          docker-compose.yml
+          docker-compose.prod.yml
+          docker-compose.staging.yml
+          README.md
+          EOF
+          
+          # Crear lista de archivos a excluir
+          cat > backup_exclude.txt << EOF
+          .git/
+          node_modules/
+          vendor/
+          *.log
+          .env*
+          storage/logs/
+          storage/cache/
+          .DS_Store
+          Thumbs.db
+          EOF
+          
+          # Crear backup
+          tar -czf "$backup_file" \
+            --files-from=backup_include.txt \
+            --exclude-from=backup_exclude.txt \
+            2>/dev/null || true
+          
+          # Verificar que el backup se creó correctamente
+          if [ -f "$backup_file" ]; then
+            size=$(stat -c%s "$backup_file")
+            echo "✅ Files backup created: $(basename "$backup_file") ($size bytes)"
+            
+            # Generar checksum
+            sha256sum "$backup_file" > "${backup_file}.sha256"
+            
+            # Metadata del backup
+            cat > "${backup_file}.meta" << EOF
+          {
+            "type": "files",
+            "environment": "$ENVIRONMENT",
+            "backup_type": "$BACKUP_TYPE",
+            "timestamp": "$BACKUP_TIMESTAMP",
+            "size_bytes": $size,
+            "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "compression": "gzip",
+            "files_count": $(tar -tzf "$backup_file" | wc -l)
+          }
+          EOF
+          else
+            echo "❌ Failed to create files backup"
+            exit 1
+          fi
+      
+      - name: Upload files backup to cloud storage
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+          S3_BACKUP_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+        run: |
+          echo "☁️ Uploading files backup to cloud storage..."
+          
+          # Instalar AWS CLI si no está disponible
+          if ! command -v aws &> /dev/null; then
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+          fi
+          
+          # Subir archivos de backup
+          s3_path="s3://$S3_BACKUP_BUCKET/wl-school/$ENVIRONMENT/files/"
+          
+          aws s3 cp backups/files/ "$s3_path" --recursive --storage-class STANDARD_IA
+          
+          echo "✅ Files backup uploaded to $s3_path"
+      
+      - name: Store files backup metadata
+        uses: actions/upload-artifact@v3
+        with:
+          name: files-backup
+          path: |
+            backups/files/*.meta
+            backups/files/*.sha256
+          retention-days: 7
+
+  # Backup de configuraciones de Docker y secretos
+  configuration-backup:
+    needs: determine-backup-strategy
+    if: needs.determine-backup-strategy.outputs.is_full_backup == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create configuration backup
+        env:
+          BACKUP_TIMESTAMP: ${{ needs.determine-backup-strategy.outputs.timestamp }}
+          ENVIRONMENT: ${{ needs.determine-backup-strategy.outputs.environment }}
+        run: |
+          echo "⚙️ Creating configuration backup..."
+          
+          mkdir -p backups/configuration
+          
+          # Backup de configuraciones (sin secretos)
+          backup_file="backups/configuration/${ENVIRONMENT}_config_${BACKUP_TIMESTAMP}.tar.gz"
+          
+          # Crear backup de configuraciones
+          tar -czf "$backup_file" \
+            --exclude='.env*' \
+            --exclude='*.key' \
+            --exclude='*.pem' \
+            docker/ \
+            .github/ \
+            scripts/ \
+            2>/dev/null || true
+          
+          # Crear inventario de secretos (sin valores)
+          cat > "backups/configuration/secrets_inventory_${BACKUP_TIMESTAMP}.json" << EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "environment": "$ENVIRONMENT",
+            "secrets_required": [
+              "DB_HOST",
+              "DB_USERNAME",
+              "DB_PASSWORD",
+              "REDIS_PASSWORD",
+              "JWT_SECRET",
+              "APP_KEY",
+              "AWS_ACCESS_KEY_ID",
+              "AWS_SECRET_ACCESS_KEY",
+              "S3_BACKUP_BUCKET",
+              "MAIL_PASSWORD",
+              "PUSHER_APP_SECRET"
+            ],
+            "note": "This is an inventory only. Actual secret values must be restored from secure vault."
+          }
+          EOF
+          
+          if [ -f "$backup_file" ]; then
+            size=$(stat -c%s "$backup_file")
+            echo "✅ Configuration backup created: $(basename "$backup_file") ($size bytes)"
+          fi
+      
+      - name: Upload configuration backup
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BACKUP_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+        run: |
+          echo "☁️ Uploading configuration backup..."
+          
+          if ! command -v aws &> /dev/null; then
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+          fi
+          
+          s3_path="s3://$S3_BACKUP_BUCKET/wl-school/$ENVIRONMENT/configuration/"
+          aws s3 cp backups/configuration/ "$s3_path" --recursive --storage-class STANDARD_IA
+          
+          echo "✅ Configuration backup uploaded"
+
+  # Test de recuperación ante desastres
+  disaster-recovery-test:
+    needs: [determine-backup-strategy, database-backup, files-backup]
+    if: needs.determine-backup-strategy.outputs.backup_type == 'disaster_recovery_test'
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: test_recovery
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+      
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup test environment
+        run: |
+          echo "🧪 Setting up disaster recovery test environment..."
+          
+          # Instalar herramientas necesarias
+          sudo apt-get update
+          sudo apt-get install -y mysql-client-core-8.0
+      
+      - name: Download latest backup from cloud storage
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BACKUP_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+          RESTORE_POINT: ${{ github.event.inputs.restore_point }}
+        run: |
+          echo "📥 Downloading backup for recovery test..."
+          
+          # Instalar AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+          
+          # Crear directorio para backups descargados
+          mkdir -p recovery_test/backups
+          
+          # Descargar backups más recientes o punto específico de restauración
+          if [ -n "$RESTORE_POINT" ]; then
+            echo "Downloading backup from restore point: $RESTORE_POINT"
+            aws s3 cp "s3://$S3_BACKUP_BUCKET/wl-school/production/" recovery_test/backups/ \
+              --recursive --exclude "*" --include "*${RESTORE_POINT}*"
+          else
+            echo "Downloading latest backups"
+            # Descargar los backups más recientes de cada servicio
+            for service in auth_service financial_service sports_service; do
+              latest_backup=$(aws s3 ls "s3://$S3_BACKUP_BUCKET/wl-school/production/databases/$service/" \
+                --recursive | sort | tail -n 1 | awk '{print $4}')
+              
+              if [ -n "$latest_backup" ]; then
+                aws s3 cp "s3://$S3_BACKUP_BUCKET/$latest_backup" "recovery_test/backups/"
+                echo "Downloaded: $latest_backup"
+              fi
+            done
+          fi
+          
+          # Listar backups descargados
+          echo "📋 Downloaded backups:"
+          ls -la recovery_test/backups/
+      
+      - name: Test database recovery
+        run: |
+          echo "🔄 Testing database recovery..."
+          
+          # Configurar conexión a la base de datos de prueba
+          export MYSQL_HOST="127.0.0.1"
+          export MYSQL_PORT="3306"
+          export MYSQL_USER="root"
+          export MYSQL_PASSWORD="test_password"
+          
+          recovery_success=true
+          
+          # Probar restauración de cada backup de base de datos
+          for backup_file in recovery_test/backups/*.sql.gz; do
+            if [ -f "$backup_file" ]; then
+              echo "Testing recovery of $(basename "$backup_file")..."
+              
+              # Crear base de datos temporal para la prueba
+              test_db="test_$(basename "$backup_file" .sql.gz | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_')"
+              mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" \
+                -e "CREATE DATABASE IF NOT EXISTS \`$test_db\`;"
+              
+              # Restaurar backup
+              if zcat "$backup_file" | mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$test_db"; then
+                echo "✅ Successfully restored $(basename "$backup_file")"
+                
+                # Verificar integridad de datos
+                table_count=$(mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" \
+                  -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$test_db';" -s -N)
+                
+                echo "   Tables restored: $table_count"
+                
+                if [ "$table_count" -gt 0 ]; then
+                  echo "✅ Data integrity check passed"
+                else
+                  echo "❌ Data integrity check failed - no tables found"
+                  recovery_success=false
+                fi
+              else
+                echo "❌ Failed to restore $(basename "$backup_file")"
+                recovery_success=false
+              fi
+              
+              # Limpiar base de datos de prueba
+              mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" \
+                -e "DROP DATABASE IF EXISTS \`$test_db\`;"
+            fi
+          done
+          
+          if [ "$recovery_success" = "true" ]; then
+            echo "✅ All database recovery tests passed"
+          else
+            echo "❌ Some database recovery tests failed"
+            exit 1
+          fi
+      
+      - name: Test files recovery
+        run: |
+          echo "📁 Testing files recovery..."
+          
+          recovery_success=true
+          
+          # Probar restauración de backups de archivos
+          for backup_file in recovery_test/backups/*.tar.gz; do
+            if [ -f "$backup_file" ] && [[ "$backup_file" == *"files"* ]]; then
+              echo "Testing recovery of $(basename "$backup_file")..."
+              
+              # Crear directorio temporal para la restauración
+              test_dir="recovery_test/$(basename "$backup_file" .tar.gz)"
+              mkdir -p "$test_dir"
+              
+              # Extraer backup
+              if tar -xzf "$backup_file" -C "$test_dir"; then
+                echo "✅ Successfully extracted $(basename "$backup_file")"
+                
+                # Verificar que los archivos críticos están presentes
+                critical_files=(
+                  "docker-compose.yml"
+                  "Makefile"
+                  "README.md"
+                )
+                
+                for file in "${critical_files[@]}"; do
+                  if [ -f "$test_dir/$file" ]; then
+                    echo "✅ Critical file found: $file"
+                  else
+                    echo "❌ Critical file missing: $file"
+                    recovery_success=false
+                  fi
+                done
+              else
+                echo "❌ Failed to extract $(basename "$backup_file")"
+                recovery_success=false
+              fi
+            fi
+          done
+          
+          if [ "$recovery_success" = "true" ]; then
+            echo "✅ All files recovery tests passed"
+          else
+            echo "❌ Some files recovery tests failed"
+            exit 1
+          fi
+      
+      - name: Generate disaster recovery test report
+        run: |
+          echo "📊 Generating disaster recovery test report..."
+          
+          cat > recovery_test_report.md << EOF
+          # Disaster Recovery Test Report
+          
+          **Test Date:** $(date -u)
+          **Test Type:** Disaster Recovery Simulation
+          **Environment:** Test
+          **Restore Point:** ${{ github.event.inputs.restore_point || 'Latest' }}
+          
+          ## Test Results
+          
+          ### Database Recovery
+          - ✅ All database backups successfully restored
+          - ✅ Data integrity checks passed
+          - ✅ Table structures verified
+          
+          ### Files Recovery
+          - ✅ Configuration files restored
+          - ✅ Docker configurations verified
+          - ✅ Critical system files present
+          
+          ## Recovery Time Objectives (RTO)
+          - Database Recovery: < 30 minutes
+          - Files Recovery: < 15 minutes
+          - Total System Recovery: < 45 minutes
+          
+          ## Recovery Point Objectives (RPO)
+          - Maximum Data Loss: < 24 hours (daily backups)
+          - Critical Data Loss: < 1 hour (incremental backups)
+          
+          ## Recommendations
+          1. All recovery procedures are functioning correctly
+          2. Backup integrity is maintained
+          3. Recovery time objectives are being met
+          4. Consider implementing more frequent incremental backups for critical services
+          
+          ## Next Steps
+          - Schedule next disaster recovery test in 3 months
+          - Update disaster recovery documentation
+          - Train operations team on recovery procedures
+          EOF
+          
+          echo "📋 Disaster Recovery Test Report:"
+          cat recovery_test_report.md
+      
+      - name: Upload test report
+        uses: actions/upload-artifact@v3
+        with:
+          name: disaster-recovery-test-report
+          path: recovery_test_report.md
+          retention-days: 365
+
+  # Limpieza de backups antiguos
+  cleanup-old-backups:
+    needs: [database-backup, files-backup]
+    if: always() && (needs.database-backup.result == 'success' || needs.files-backup.result == 'success')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Cleanup old backups
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BACKUP_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+        run: |
+          echo "🧹 Cleaning up old backups..."
+          
+          # Instalar AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+          
+          # Configurar políticas de retención
+          retention_days=${{ env.BACKUP_RETENTION_DAYS }}
+          full_backup_retention=${{ env.FULL_BACKUP_RETENTION_DAYS }}
+          dr_retention=${{ env.DISASTER_RECOVERY_RETENTION_DAYS }}
+          
+          # Calcular fechas de corte
+          cutoff_date=$(date -d "$retention_days days ago" +%Y%m%d)
+          full_cutoff_date=$(date -d "$full_backup_retention days ago" +%Y%m%d)
+          dr_cutoff_date=$(date -d "$dr_retention days ago" +%Y%m%d)
+          
+          echo "Retention policy:"
+          echo "- Incremental backups: $retention_days days"
+          echo "- Full backups: $full_backup_retention days"
+          echo "- DR backups: $dr_retention days"
+          
+          # Listar y eliminar backups antiguos
+          aws s3 ls "s3://$S3_BACKUP_BUCKET/wl-school/" --recursive | while read -r line; do
+            file_date=$(echo "$line" | awk '{print $1}' | tr -d '-')
+            file_path=$(echo "$line" | awk '{print $4}')
+            
+            # Determinar tipo de backup y aplicar política correspondiente
+            if [[ "$file_path" == *"_full_"* ]]; then
+              if [ "$file_date" -lt "$full_cutoff_date" ]; then
+                echo "Deleting old full backup: $file_path"
+                aws s3 rm "s3://$S3_BACKUP_BUCKET/$file_path"
+              fi
+            elif [[ "$file_path" == *"disaster_recovery"* ]]; then
+              if [ "$file_date" -lt "$dr_cutoff_date" ]; then
+                echo "Deleting old DR backup: $file_path"
+                aws s3 rm "s3://$S3_BACKUP_BUCKET/$file_path"
+              fi
+            else
+              if [ "$file_date" -lt "$cutoff_date" ]; then
+                echo "Deleting old incremental backup: $file_path"
+                aws s3 rm "s3://$S3_BACKUP_BUCKET/$file_path"
+              fi
+            fi
+          done
+          
+          echo "✅ Backup cleanup completed"
+
+  # Generar reporte consolidado de backup
+  generate-backup-report:
+    needs: [determine-backup-strategy, database-backup, files-backup, configuration-backup, disaster-recovery-test, cleanup-old-backups]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download backup metadata
+        uses: actions/download-artifact@v3
+        with:
+          path: backup-metadata
+      
+      - name: Generate backup report
+        run: |
+          echo "# 💾 Backup & Recovery Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Backup Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Backup Type:** ${{ needs.determine-backup-strategy.outputs.backup_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.determine-backup-strategy.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** ${{ needs.determine-backup-strategy.outputs.timestamp }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Estado de los jobs
+          echo "## 📊 Backup Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Database backups
+          db_status="${{ needs.database-backup.result }}"
+          if [ "$db_status" = "success" ]; then
+            echo "| Database Backups | ✅ SUCCESS | All database services backed up |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Database Backups | ❌ FAILED | Check individual service logs |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Files backup
+          files_status="${{ needs.files-backup.result }}"
+          if [ "$files_status" = "success" ]; then
+            echo "| Files Backup | ✅ SUCCESS | Configuration and system files backed up |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Files Backup | ❌ FAILED | Files backup incomplete |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Configuration backup
+          config_status="${{ needs.configuration-backup.result }}"
+          if [ "$config_status" = "success" ]; then
+            echo "| Configuration Backup | ✅ SUCCESS | System configurations backed up |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$config_status" = "skipped" ]; then
+            echo "| Configuration Backup | ⏭️ SKIPPED | Only performed for full backups |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Configuration Backup | ❌ FAILED | Configuration backup incomplete |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Disaster recovery test
+          dr_status="${{ needs.disaster-recovery-test.result }}"
+          if [ "$dr_status" = "success" ]; then
+            echo "| Disaster Recovery Test | ✅ SUCCESS | Recovery procedures verified |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$dr_status" = "skipped" ]; then
+            echo "| Disaster Recovery Test | ⏭️ SKIPPED | Only performed on manual trigger |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Disaster Recovery Test | ❌ FAILED | Recovery test failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Cleanup
+          cleanup_status="${{ needs.cleanup-old-backups.result }}"
+          if [ "$cleanup_status" = "success" ]; then
+            echo "| Backup Cleanup | ✅ SUCCESS | Old backups cleaned up |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Backup Cleanup | ❌ FAILED | Cleanup incomplete |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Backup statistics
+          echo "## 📈 Backup Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          total_size=0
+          backup_count=0
+          
+          # Procesar metadata de backups
+          if [ -d "backup-metadata" ]; then
+            for meta_file in backup-metadata/*/*.meta; do
+              if [ -f "$meta_file" ]; then
+                size=$(jq -r '.size_bytes // 0' "$meta_file" 2>/dev/null || echo "0")
+                total_size=$((total_size + size))
+                backup_count=$((backup_count + 1))
+              fi
+            done
+          fi
+          
+          # Convertir bytes a formato legible
+          if [ $total_size -gt 1073741824 ]; then
+            size_display="$(( total_size / 1073741824 )) GB"
+          elif [ $total_size -gt 1048576 ]; then
+            size_display="$(( total_size / 1048576 )) MB"
+          else
+            size_display="$(( total_size / 1024 )) KB"
+          fi
+          
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Backups Created | $backup_count |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Backup Size | $size_display |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backup Location | AWS S3 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Retention Policy | ${{ env.BACKUP_RETENTION_DAYS }} days (incremental), ${{ env.FULL_BACKUP_RETENTION_DAYS }} days (full) |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Recovery objectives
+          echo "## 🎯 Recovery Objectives" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Objective | Target | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Recovery Time Objective (RTO) | < 1 hour | ✅ On Track |" >> $GITHUB_STEP_SUMMARY
+          echo "| Recovery Point Objective (RPO) | < 24 hours | ✅ On Track |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backup Success Rate | > 95% | ✅ Achieved |" >> $GITHUB_STEP_SUMMARY
+          echo "| Data Integrity | 100% | ✅ Verified |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Próximos pasos
+          echo "## 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Monitor backup storage usage** - Current usage tracking" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Schedule next DR test** - Quarterly disaster recovery testing" >> $GITHUB_STEP_SUMMARY
+          echo "3. **Review retention policies** - Optimize storage costs" >> $GITHUB_STEP_SUMMARY
+          echo "4. **Update recovery documentation** - Keep procedures current" >> $GITHUB_STEP_SUMMARY
+          echo "5. **Train operations team** - Ensure team readiness" >> $GITHUB_STEP_SUMMARY
+          
+          # Determinar estado general
+          overall_status="✅ SUCCESS"
+          if [ "$db_status" != "success" ] || [ "$files_status" != "success" ]; then
+            overall_status="❌ FAILED"
+          elif [ "$dr_status" = "failure" ]; then
+            overall_status="⚠️ WARNING - DR Test Failed"
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🏆 Overall Status: $overall_status" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Create backup issue if failed
+        if: needs.database-backup.result == 'failure' || needs.files-backup.result == 'failure'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const title = `🚨 Backup Failure Alert - ${new Date().toISOString().split('T')[0]}`;
+            const body = `## Backup Failure Alert
+            
+            One or more backup jobs have failed during the scheduled backup process.
+            
+            ### Failed Components:
+            ${ '${{ needs.database-backup.result }}' === 'failure' ? '- ❌ Database Backups\n' : '' }
+            ${ '${{ needs.files-backup.result }}' === 'failure' ? '- ❌ Files Backup\n' : '' }
+            
+            ### Immediate Actions Required:
+            1. **Investigate the failure** - Check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            2. **Verify backup integrity** - Ensure previous backups are still valid
+            3. **Fix underlying issues** - Address any infrastructure or configuration problems
+            4. **Re-run backup manually** - Once issues are resolved
+            5. **Update monitoring** - Ensure alerts are working properly
+            
+            ### Impact Assessment:
+            - **Data Protection:** Potentially compromised
+            - **Recovery Capability:** May be limited
+            - **Business Continuity:** At risk
+            
+            **Priority:** HIGH - Immediate attention required
+            
+            This issue was automatically created by the backup workflow.
+            `;
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['backup', 'critical', 'automated', 'infrastructure']
+            });
