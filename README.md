@@ -287,4 +287,4 @@ Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](./LICENSE) p
 <div align="center">
   <p>Hecho con ❤️ para las escuelas de fútbol</p>
   <p>© 2024 WL School. Todos los derechos reservados.</p>
-</div>
+</div># wl-soccer-school
