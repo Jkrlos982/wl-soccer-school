@@ -95,51 +95,45 @@ const AuthLayout: React.FC<AuthLayoutProps> = ({
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   return (
-    <StyledContainer maxWidth={maxWidth}>
-      <Box display="flex" justifyContent="center">
-        <Box width={{ xs: '100%', sm: '83.33%', md: '66.67%' }}>
-          <StyledPaper elevation={0}>
-            {/* Logo Section */}
-            <LogoContainer>
-              <Logo variant="h4">
-                WL-School
-              </Logo>
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ fontWeight: 500 }}
-              >
-                Sistema de Gestión Escolar
-              </Typography>
-            </LogoContainer>
+    <Box>
+      {/* Logo Section - Simplified */}
+      <LogoContainer>
+        <Logo variant={isMobile ? 'h5' : 'h4'}>
+          WL-School
+        </Logo>
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ fontWeight: 500, mb: 2 }}
+        >
+          Sistema de Gestión Escolar
+        </Typography>
+      </LogoContainer>
 
-            {/* Header Section */}
-            <HeaderContainer>
-              <Title variant={isMobile ? 'h5' : 'h4'}>
-                {title}
-              </Title>
-              {subtitle && (
-                <Subtitle variant="body1">
-                  {subtitle}
-                </Subtitle>
-              )}
-            </HeaderContainer>
+      {/* Header Section */}
+      <HeaderContainer>
+        <Title variant={isMobile ? 'h5' : 'h4'}>
+          {title}
+        </Title>
+        {subtitle && (
+          <Subtitle variant="body1">
+            {subtitle}
+          </Subtitle>
+        )}
+      </HeaderContainer>
 
-            {/* Content Section */}
-            <ContentContainer>
-              {children}
-            </ContentContainer>
+      {/* Content Section */}
+      <ContentContainer>
+        {children}
+      </ContentContainer>
 
-            {/* Footer Section */}
-            <FooterContainer>
-              <FooterText>
-                © {new Date().getFullYear()} WL-School. Todos los derechos reservados.
-              </FooterText>
-            </FooterContainer>
-          </StyledPaper>
-        </Box>
-      </Box>
-    </StyledContainer>
+      {/* Footer Section - Simplified */}
+      <FooterContainer>
+        <FooterText>
+          © {new Date().getFullYear()} WL-School. Todos los derechos reservados.
+        </FooterText>
+      </FooterContainer>
+    </Box>
   );
 };
 

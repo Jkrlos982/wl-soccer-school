@@ -34,7 +34,7 @@ class ProfileController extends Controller
             'data' => [
                 'user' => [
                     'id' => $user->id,
-                    'name' => $user->name,
+                    'name' => $user->full_name,
                     'email' => $user->email,
                     'phone' => $user->phone,
                     'address' => $user->address,
@@ -77,7 +77,8 @@ class ProfileController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'name' => 'sometimes|required|string|max:255',
+            'first_name' => 'sometimes|required|string|max:255',
+            'last_name' => 'sometimes|required|string|max:255',
             'email' => [
                 'sometimes',
                 'required',
@@ -100,7 +101,7 @@ class ProfileController extends Controller
         }
 
         $user->fill($request->only([
-            'name', 'email', 'phone', 'address', 'birth_date', 'gender'
+            'first_name', 'last_name', 'email', 'phone', 'address', 'birth_date', 'gender'
         ]));
 
         $user->save();
@@ -111,7 +112,7 @@ class ProfileController extends Controller
             'data' => [
                 'user' => [
                     'id' => $user->id,
-                    'name' => $user->name,
+                    'name' => $user->full_name,
                     'email' => $user->email,
                     'phone' => $user->phone,
                     'address' => $user->address,
