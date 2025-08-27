@@ -28,6 +28,33 @@ services:
       - ./microservices/auth-service:/var/www/html
       - ./storage/logs/auth:/var/www/html/storage/logs
 
+  # Financial Service
+  financial-service:
+    build:
+      context: ./microservices/financial-service
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8000"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql-financial
+      - DB_PORT=3306
+      - DB_DATABASE=wl_school_financial
+      - DB_USERNAME=root
+      - DB_PASSWORD=password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - mysql-financial
+      - redis
+    networks:
+      - wl-school-network
+    volumes:
+      - ./microservices/financial-service:/var/www/html
+      - ./storage/logs/financial:/var/www/html/storage/logs
+
   # Frontend PWA
   frontend-pwa:
     build:
@@ -38,8 +65,10 @@ services:
     environment:
       - NODE_ENV=development
       - REACT_APP_AUTH_SERVICE_URL=http://localhost:8001
+      - REACT_APP_FINANCIAL_SERVICE_URL=http://localhost:8002
     depends_on:
       - auth-service
+      - financial-service
     networks:
       - wl-school-network
     volumes:
@@ -57,6 +86,20 @@ services:
     volumes:
       - mysql_auth_data:/var/lib/mysql
       - ./database/migrations/auth_service.sql:/docker-entrypoint-initdb.d/auth_service.sql
+    networks:
+      - wl-school-network
+
+  # Financial Database
+  mysql-financial:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: wl_school_financial
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_financial_data:/var/lib/mysql
+      - ./database/migrations/financial_service.sql:/docker-entrypoint-initdb.d/financial_service.sql
     networks:
       - wl-school-network
 
@@ -82,6 +125,7 @@ services:
       - ./storage/logs/nginx:/var/log/nginx
     depends_on:
       - auth-service
+      - financial-service
       - frontend-pwa
     networks:
       - wl-school-network
@@ -98,6 +142,7 @@ services:
       - "8080:80"
     depends_on:
       - mysql-auth
+      - mysql-financial
     networks:
       - wl-school-network
 
@@ -115,6 +160,7 @@ services:
 
 volumes:
   mysql_auth_data:
+  mysql_financial_data:
   redis_data:
 
 networks:
