@@ -24,20 +24,17 @@ class CreateTransactionRequest extends FormRequest
     public function rules()
     {
         return [
-            'school_id' => 'required|integer|min:1',
             'financial_concept_id' => 'required|integer|exists:financial_concepts,id',
             'reference_number' => 'nullable|string|max:100|unique:transactions,reference_number',
-            'description' => 'required|string|max:500',
+            'description' => 'nullable|string|max:1000',
             'amount' => 'required|numeric|min:0.01',
-            'transaction_date' => 'required|date',
-            'status' => 'required|in:pending,completed,cancelled,failed',
-            'payment_method' => 'nullable|in:cash,bank_transfer,credit_card,debit_card,check,other',
+            'transaction_date' => 'required|date|before_or_equal:today',
+            'payment_method' => 'required|in:cash,bank_transfer,credit_card,debit_card,check,other',
             'metadata' => 'nullable|array',
-            'created_by' => 'required|integer|min:1',
-            'accounts' => 'required|array|min:1',
-            'accounts.*.account_id' => 'required|integer|exists:accounts,id',
-            'accounts.*.type' => 'required|in:debit,credit',
-            'accounts.*.amount' => 'required|numeric|min:0.01'
+            'accounts' => 'nullable|array',
+            'accounts.*.account_id' => 'required_with:accounts|integer|exists:accounts,id',
+            'accounts.*.type' => 'required_with:accounts|in:debit,credit',
+            'accounts.*.amount' => 'required_with:accounts|numeric|min:0.01'
         ];
     }
 
@@ -49,23 +46,49 @@ class CreateTransactionRequest extends FormRequest
     public function messages()
     {
         return [
-            'school_id.required' => 'El ID de la escuela es requerido.',
             'financial_concept_id.required' => 'El concepto financiero es requerido.',
             'financial_concept_id.exists' => 'El concepto financiero seleccionado no existe.',
-            'description.required' => 'La descripción es requerida.',
             'amount.required' => 'El monto es requerido.',
+            'amount.numeric' => 'El monto debe ser un número.',
             'amount.min' => 'El monto debe ser mayor a 0.',
             'transaction_date.required' => 'La fecha de transacción es requerida.',
-            'status.required' => 'El estado es requerido.',
-            'status.in' => 'El estado debe ser: pending, completed, cancelled o failed.',
-            'created_by.required' => 'El usuario creador es requerido.',
-            'accounts.required' => 'Debe especificar al menos una cuenta.',
-            'accounts.*.account_id.required' => 'El ID de cuenta es requerido.',
+            'transaction_date.date' => 'La fecha de transacción debe ser una fecha válida.',
+            'transaction_date.before_or_equal' => 'La fecha de transacción no puede ser futura.',
+            'payment_method.required' => 'El método de pago es requerido.',
+            'payment_method.in' => 'El método de pago seleccionado no es válido.',
+            'reference_number.unique' => 'El número de referencia ya existe.',
+            'accounts.*.account_id.required_with' => 'El ID de cuenta es requerido cuando se especifican cuentas.',
             'accounts.*.account_id.exists' => 'La cuenta especificada no existe.',
-            'accounts.*.type.required' => 'El tipo de movimiento es requerido.',
+            'accounts.*.type.required_with' => 'El tipo de movimiento es requerido.',
             'accounts.*.type.in' => 'El tipo debe ser debit o credit.',
-            'accounts.*.amount.required' => 'El monto por cuenta es requerido.',
+            'accounts.*.amount.required_with' => 'El monto por cuenta es requerido.',
             'accounts.*.amount.min' => 'El monto por cuenta debe ser mayor a 0.'
         ];
+    }
+
+    /**
+     * Configure the validator instance.
+     */
+    public function withValidator($validator)
+    {
+        $validator->after(function ($validator) {
+            // Validate that accounts belong to the same school
+            if ($this->has('accounts') && is_array($this->accounts)) {
+                $schoolId = $this->header('X-School-ID');
+                if ($schoolId) {
+                    foreach ($this->accounts as $index => $account) {
+                        if (isset($account['account_id'])) {
+                            $accountModel = \App\Models\Account::find($account['account_id']);
+                            if ($accountModel && $accountModel->school_id != $schoolId) {
+                                $validator->errors()->add(
+                                    "accounts.{$index}.account_id",
+                                    'La cuenta no pertenece a la escuela actual.'
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 }

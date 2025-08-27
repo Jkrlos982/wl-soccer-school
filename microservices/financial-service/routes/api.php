@@ -70,6 +70,16 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     // Transactions Management
     Route::apiResource('transactions', TransactionController::class);
     Route::prefix('transactions')->group(function () {
+        // Status management (approval workflow)
+        Route::patch('/{id}/status', [TransactionController::class, 'updateStatus']);
+        
+        // Statistics and reporting
+        Route::get('/statistics', [TransactionController::class, 'statistics']);
+        
+        // Reference number generation
+        Route::post('/generate-reference', [TransactionController::class, 'generateReferenceNumber']);
+        
+        // Legacy endpoints (for backward compatibility)
         Route::get('/by-concept/{conceptId}', [TransactionController::class, 'getByFinancialConcept']);
         Route::get('/by-date-range', [TransactionController::class, 'getByDateRange']);
         Route::get('/summary', [TransactionController::class, 'getSummary']);
