@@ -3,6 +3,7 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
+use App\Http\Controllers\RoleController;
 
 /*
 |--------------------------------------------------------------------------
@@ -38,6 +39,18 @@ Route::prefix('v1')->group(function () {
             Route::post('/logout', [AuthController::class, 'logout']);
             Route::post('/refresh', [AuthController::class, 'refresh']);
         });
+    });
+    
+    // Role and Permission Management routes (protected)
+    Route::middleware('auth:api')->group(function () {
+        // Roles endpoints
+        Route::get('/roles', [RoleController::class, 'getRoles']);
+        Route::get('/users/{userId}/roles', [RoleController::class, 'getUserRoles']);
+        Route::post('/users/{userId}/roles', [RoleController::class, 'assignRolesToUser']);
+        
+        // Permissions endpoints
+        Route::get('/permissions', [RoleController::class, 'getPermissions']);
+        Route::post('/roles/{roleId}/permissions', [RoleController::class, 'assignPermissionsToRole']);
     });
     
     // Legacy Sanctum route (for compatibility)

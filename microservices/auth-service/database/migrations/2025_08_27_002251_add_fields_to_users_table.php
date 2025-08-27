@@ -13,24 +13,23 @@ class AddFieldsToUsersTable extends Migration
      */
     public function up()
     {
-        Schema::table('users', function (Blueprint $table) {
-            $table->dropColumn('name');
-            $table->unsignedBigInteger('school_id')->after('id');
-            $table->string('first_name')->after('school_id');
-            $table->string('last_name')->after('first_name');
-            $table->string('phone')->nullable()->after('email');
-            $table->string('avatar')->nullable()->after('phone');
-            $table->boolean('is_active')->default(true)->after('avatar');
-            $table->timestamp('last_login_at')->nullable()->after('is_active');
-            
-            // Foreign key constraint
-            $table->foreign('school_id')->references('id')->on('schools')->onDelete('cascade');
-            
-            // Indexes
-            $table->index(['school_id']);
-            $table->index(['is_active']);
-            $table->index(['email', 'school_id']);
-            $table->index(['last_login_at']);
+        // Drop the existing users table and recreate it with all fields
+        Schema::dropIfExists('users');
+        
+        Schema::create('users', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('school_id');
+            $table->string('first_name');
+            $table->string('last_name');
+            $table->string('email')->unique();
+            $table->timestamp('email_verified_at')->nullable();
+            $table->string('phone')->nullable();
+            $table->string('avatar')->nullable();
+            $table->boolean('is_active')->default(true);
+            $table->timestamp('last_login_at')->nullable();
+            $table->string('password');
+            $table->rememberToken();
+            $table->timestamps();
         });
     }
 
@@ -41,22 +40,7 @@ class AddFieldsToUsersTable extends Migration
      */
     public function down()
     {
-        Schema::table('users', function (Blueprint $table) {
-            $table->dropForeign(['school_id']);
-            $table->dropIndex(['school_id']);
-            $table->dropIndex(['is_active']);
-            $table->dropIndex(['email', 'school_id']);
-            $table->dropIndex(['last_login_at']);
-            
-            $table->dropColumn([
-                'school_id',
-                'first_name',
-                'last_name',
-                'phone',
-                'avatar',
-                'is_active',
-                'last_login_at'
-            ]);
-        });
+        // SQLite doesn't support dropping columns easily
+        // This migration is not reversible in SQLite
     }
 }
