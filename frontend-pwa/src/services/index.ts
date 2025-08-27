@@ -5,6 +5,7 @@ export { default as SchoolService } from './schoolService';
 export { default as UserService } from './userService';
 export { default as NotificationService } from './notificationService';
 export { default as FinancialService } from './financialService';
+export { default as TransactionService } from './transactionService';
 
 // Re-export types for convenience
 export type {
