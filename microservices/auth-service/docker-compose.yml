@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # Auth Service Application
+  auth-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wl-school-auth-service
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/custom.ini
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_HOST=mysql-auth
+      - DB_DATABASE=wl_school_auth
+      - DB_USERNAME=root
+      - DB_PASSWORD=password
+      - REDIS_HOST=redis-auth
+    depends_on:
+      - mysql-auth
+      - redis-auth
+    networks:
+      - wl-school-auth-network
+    ports:
+      - "8001:9000"
+
+  # Nginx Web Server
+  nginx-auth:
+    image: nginx:alpine
+    container_name: wl-school-auth-nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/var/www/html
+      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - auth-service
+    networks:
+      - wl-school-auth-network
+
+  # MySQL Database
+  mysql-auth:
+    image: mysql:8.0
+    container_name: wl-school-auth-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: wl_school_auth
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_PASSWORD: password
+      MYSQL_USER: wlschool
+      SERVICE_TAGS: dev
+      SERVICE_NAME: mysql
+    volumes:
+      - mysql-auth-data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3307:3306"
+    networks:
+      - wl-school-auth-network
+    command: --default-authentication-plugin=mysql_native_password
+
+  # Redis Cache
+  redis-auth:
+    image: redis:7-alpine
+    container_name: wl-school-auth-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-auth-data:/data
+    networks:
+      - wl-school-auth-network
+    command: redis-server --appendonly yes --requirepass ""
+
+  # MailHog for Email Testing
+  mailhog-auth:
+    image: mailhog/mailhog:latest
+    container_name: wl-school-auth-mailhog
+    restart: unless-stopped
+    ports:
+      - "1026:1025" # SMTP
+      - "8026:8025" # Web UI
+    networks:
+      - wl-school-auth-network
+
+  # phpMyAdmin for Database Management
+  phpmyadmin-auth:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: wl-school-auth-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql-auth
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: password
+      MYSQL_ROOT_PASSWORD: password
+    ports:
+      - "8081:80"
+    depends_on:
+      - mysql-auth
+    networks:
+      - wl-school-auth-network
+
+  # Redis Commander for Redis Management
+  redis-commander-auth:
+    image: rediscommander/redis-commander:latest
+    container_name: wl-school-auth-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis-auth:6379
+      HTTP_USER: admin
+      HTTP_PASSWORD: admin123
+    ports:
+      - "8082:8081"
+    depends_on:
+      - redis-auth
+    networks:
+      - wl-school-auth-network
+
+volumes:
+  mysql-auth-data:
+    driver: local
+  redis-auth-data:
+    driver: local
+
+networks:
+  wl-school-auth-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

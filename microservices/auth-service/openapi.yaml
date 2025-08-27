@@ -1,0 +1,839 @@
+openapi: 3.1.0
+info:
+  title: WL School - Auth Service API
+  description: |
+    Authentication and Authorization Service for WL School Management System.
+    
+    This service handles user authentication, role-based access control, and permission management.
+    
+    ## Authentication
+    
+    The API uses JWT (JSON Web Tokens) for authentication. Include the token in the Authorization header:
+    
+    ```
+    Authorization: Bearer <your-jwt-token>
+    ```
+    
+    ## Rate Limiting
+    
+    Login attempts are rate limited to 5 attempts per IP address within 5 minutes.
+    
+    ## Error Handling
+    
+    All endpoints return consistent error responses with the following structure:
+    
+    ```json
+    {
+      "success": false,
+      "message": "Error description",
+      "errors": {
+        "field_name": ["Specific error message"]
+      }
+    }
+    ```
+  version: 1.0.0
+  contact:
+    name: WL School Development Team
+    email: dev@wlschool.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8001/api
+    description: Local development server
+  - url: http://localhost:8000/api
+    description: API Gateway (local)
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health Check
+      summary: Service health check
+      description: Returns the health status of the auth service
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: auth-service
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2024-01-15T10:30:00.000Z"
+
+  /v1/auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: |
+        Authenticate a user with email and password. Optionally specify a school subdomain.
+        
+        **Rate Limiting:** 5 attempts per IP address within 5 minutes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "user@testschool.com"
+                password:
+                  type: string
+                  minLength: 6
+                  example: "password123"
+                school_subdomain:
+                  type: string
+                  maxLength: 100
+                  example: "testschool"
+                  description: Optional school subdomain for multi-tenant authentication
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Account deactivated or school access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        '429':
+          description: Too many login attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: User registration
+      description: Register a new user account with role assignment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - school_subdomain
+                - first_name
+                - last_name
+                - email
+                - password
+                - password_confirmation
+              properties:
+                school_subdomain:
+                  type: string
+                  example: "testschool"
+                  description: School subdomain (must exist and be active)
+                first_name:
+                  type: string
+                  maxLength: 100
+                  example: "John"
+                last_name:
+                  type: string
+                  maxLength: 100
+                  example: "Doe"
+                email:
+                  type: string
+                  format: email
+                  maxLength: 255
+                  example: "john.doe@testschool.com"
+                password:
+                  type: string
+                  minLength: 8
+                  example: "password123"
+                password_confirmation:
+                  type: string
+                  example: "password123"
+                phone:
+                  type: string
+                  maxLength: 20
+                  example: "+1234567890"
+                role:
+                  type: string
+                  example: "student"
+                  description: Role name (must exist), defaults to 'student'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '403':
+          description: School subscription expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: School not found or inactive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        '500':
+          description: Registration failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/auth/me:
+    get:
+      tags:
+        - Authentication
+      summary: Get current user profile
+      description: Retrieve the authenticated user's profile information
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/User'
+        '401':
+          description: User not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: User logout
+      description: Invalidate the current JWT token
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Successfully logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Successfully logged out"
+        '500':
+          description: Failed to logout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh JWT token
+      description: Generate a new JWT token using the current token
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Token refresh failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/roles:
+    get:
+      tags:
+        - Role Management
+      summary: Get all roles
+      description: Retrieve all available roles with their permissions
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Roles retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Role'
+                  message:
+                    type: string
+                    example: "Roles retrieved successfully"
+        '500':
+          description: Error retrieving roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/permissions:
+    get:
+      tags:
+        - Permission Management
+      summary: Get all permissions
+      description: Retrieve all available permissions grouped by module
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Permissions retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        module:
+                          type: string
+                          example: "users"
+                        permissions:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/Permission'
+                  message:
+                    type: string
+                    example: "Permissions retrieved successfully"
+        '500':
+          description: Error retrieving permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/users/{userId}/roles:
+    get:
+      tags:
+        - User Role Management
+      summary: Get user roles
+      description: Retrieve roles and permissions for a specific user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 123
+      responses:
+        '200':
+          description: User roles retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      user_id:
+                        type: integer
+                        example: 123
+                      user_name:
+                        type: string
+                        example: "John Doe"
+                      roles:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/UserRole'
+                      all_permissions:
+                        type: array
+                        items:
+                          type: string
+                        example: ["view-users", "edit-users"]
+                  message:
+                    type: string
+                    example: "User roles retrieved successfully"
+        '403':
+          description: Access denied - user not from same school
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Error retrieving user roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      tags:
+        - User Role Management
+      summary: Assign roles to user
+      description: Assign one or more roles to a user (replaces existing roles)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 123
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - roles
+              properties:
+                roles:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                  example: ["teacher", "admin"]
+                  description: Array of role names to assign
+      responses:
+        '200':
+          description: Roles assigned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      user_id:
+                        type: integer
+                        example: 123
+                      user_name:
+                        type: string
+                        example: "John Doe"
+                      roles:
+                        type: array
+                        items:
+                          type: string
+                        example: ["teacher", "admin"]
+                  message:
+                    type: string
+                    example: "Roles assigned successfully"
+        '403':
+          description: Access denied - user not from same school
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        '500':
+          description: Error assigning roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/roles/{roleId}/permissions:
+    post:
+      tags:
+        - Role Permission Management
+      summary: Assign permissions to role
+      description: Assign permissions to a role (replaces existing permissions)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: roleId
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - permissions
+              properties:
+                permissions:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                  example: ["view-users", "edit-users", "delete-users"]
+                  description: Array of permission names to assign
+      responses:
+        '200':
+          description: Permissions assigned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      role_id:
+                        type: integer
+                        example: 1
+                      role_name:
+                        type: string
+                        example: "admin"
+                      permissions:
+                        type: array
+                        items:
+                          type: string
+                        example: ["view-users", "edit-users", "delete-users"]
+                  message:
+                    type: string
+                    example: "Permissions assigned successfully"
+        '403':
+          description: Cannot modify super admin role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Role not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        '500':
+          description: Error assigning permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from login or register endpoints
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 123
+        email:
+          type: string
+          format: email
+          example: "user@testschool.com"
+        first_name:
+          type: string
+          example: "John"
+        last_name:
+          type: string
+          example: "Doe"
+        full_name:
+          type: string
+          example: "John Doe"
+        phone:
+          type: string
+          nullable: true
+          example: "+1234567890"
+        avatar_url:
+          type: string
+          nullable: true
+          example: "https://example.com/avatar.jpg"
+        is_active:
+          type: boolean
+          example: true
+        email_verified:
+          type: boolean
+          example: true
+        last_login_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2024-01-15T10:30:00.000Z"
+        school:
+          $ref: '#/components/schemas/School'
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserRole'
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserPermission'
+
+    School:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "Test School"
+        subdomain:
+          type: string
+          example: "testschool"
+        logo_url:
+          type: string
+          nullable: true
+          example: "https://example.com/logo.png"
+
+    Role:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "admin"
+        display_name:
+          type: string
+          example: "Administrator"
+        description:
+          type: string
+          nullable: true
+          example: "System administrator with full access"
+        permissions_count:
+          type: integer
+          example: 15
+        permissions:
+          type: array
+          items:
+            type: string
+          example: ["view-users", "edit-users", "delete-users"]
+
+    UserRole:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "admin"
+        display_name:
+          type: string
+          example: "Administrator"
+        permissions:
+          type: array
+          items:
+            type: string
+          example: ["view-users", "edit-users"]
+
+    Permission:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "view-users"
+        display_name:
+          type: string
+          example: "View Users"
+
+    UserPermission:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "view-users"
+        guard_name:
+          type: string
+          example: "api"
+
+    AuthResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Login successful"
+        data:
+          type: object
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            access_token:
+              type: string
+              example: "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+            token_type:
+              type: string
+              example: "bearer"
+            expires_in:
+              type: integer
+              example: 3600
+              description: Token expiration time in seconds
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Error description"
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            auth: ["Invalid email or password"]
+        error:
+          type: string
+          description: Detailed error message (only in debug mode)
+          example: "Detailed technical error message"
+
+    ValidationErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Validation failed"
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            email: ["The email field is required."]
+            password: ["The password must be at least 6 characters."]
+
+tags:
+  - name: Health Check
+    description: Service health monitoring
+  - name: Authentication
+    description: User authentication operations
+  - name: Role Management
+    description: Role management operations
+  - name: Permission Management
+    description: Permission management operations
+  - name: User Role Management
+    description: User role assignment operations
+  - name: Role Permission Management
+    description: Role permission assignment operations

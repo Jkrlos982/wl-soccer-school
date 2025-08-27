@@ -1,37 +1,10 @@
 version: '3.8'
 
 services:
-  # API Gateway
-  api-gateway:
-    build:
-      context: ./api-gateway
-      dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-main
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_gateway
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-main
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./api-gateway:/var/www/html
-      - ./storage/logs/gateway:/var/www/html/storage/logs
-
   # Auth Service
   auth-service:
     build:
-      context: ./auth-service
+      context: ./microservices/auth-service
       dockerfile: Dockerfile
     ports:
       - "8001:8000"
@@ -52,224 +25,8 @@ services:
     networks:
       - wl-school-network
     volumes:
-      - ./auth-service:/var/www/html
+      - ./microservices/auth-service:/var/www/html
       - ./storage/logs/auth:/var/www/html/storage/logs
-
-  # Financial Service
-  financial-service:
-    build:
-      context: ./financial-service
-      dockerfile: Dockerfile
-    ports:
-      - "8002:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-financial
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_financial
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-financial
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./financial-service:/var/www/html
-      - ./storage/logs/financial:/var/www/html/storage/logs
-
-  # Sports Service
-  sports-service:
-    build:
-      context: ./sports-service
-      dockerfile: Dockerfile
-    ports:
-      - "8003:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-sports
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_sports
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-sports
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./sports-service:/var/www/html
-      - ./storage/logs/sports:/var/www/html/storage/logs
-
-  # Notification Service
-  notification-service:
-    build:
-      context: ./notification-service
-      dockerfile: Dockerfile
-    ports:
-      - "8004:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-notification
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_notification
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-notification
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./notification-service:/var/www/html
-      - ./storage/logs/notification:/var/www/html/storage/logs
-
-  # Medical Service
-  medical-service:
-    build:
-      context: ./medical-service
-      dockerfile: Dockerfile
-    ports:
-      - "8005:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-medical
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_medical
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-medical
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./medical-service:/var/www/html
-      - ./storage/logs/medical:/var/www/html/storage/logs
-
-  # Payroll Service
-  payroll-service:
-    build:
-      context: ./payroll-service
-      dockerfile: Dockerfile
-    ports:
-      - "8006:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-payroll
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_payroll
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-payroll
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./payroll-service:/var/www/html
-      - ./storage/logs/payroll:/var/www/html/storage/logs
-
-  # Report Service
-  report-service:
-    build:
-      context: ./report-service
-      dockerfile: Dockerfile
-    ports:
-      - "8007:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-report
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_report
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-report
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./report-service:/var/www/html
-      - ./storage/logs/report:/var/www/html/storage/logs
-
-  # Calendar Service
-  calendar-service:
-    build:
-      context: ./calendar-service
-      dockerfile: Dockerfile
-    ports:
-      - "8008:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-calendar
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_calendar
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-calendar
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./calendar-service:/var/www/html
-      - ./storage/logs/calendar:/var/www/html/storage/logs
-
-  # Customization Service
-  customization-service:
-    build:
-      context: ./customization-service
-      dockerfile: Dockerfile
-    ports:
-      - "8009:8000"
-    environment:
-      - APP_ENV=local
-      - APP_DEBUG=true
-      - DB_CONNECTION=mysql
-      - DB_HOST=mysql-customization
-      - DB_PORT=3306
-      - DB_DATABASE=wl_school_customization
-      - DB_USERNAME=root
-      - DB_PASSWORD=password
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - mysql-customization
-      - redis
-    networks:
-      - wl-school-network
-    volumes:
-      - ./customization-service:/var/www/html
-      - ./storage/logs/customization:/var/www/html/storage/logs
 
   # Frontend PWA
   frontend-pwa:
@@ -280,30 +37,16 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=development
-      - REACT_APP_API_GATEWAY_URL=http://localhost:8000
       - REACT_APP_AUTH_SERVICE_URL=http://localhost:8001
     depends_on:
-      - api-gateway
+      - auth-service
     networks:
       - wl-school-network
     volumes:
       - ./frontend-pwa:/app
       - /app/node_modules
 
-  # Databases
-  mysql-main:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_gateway
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_main_data:/var/lib/mysql
-      - ./database/init:/docker-entrypoint-initdb.d
-    networks:
-      - wl-school-network
-
+  # Auth Database
   mysql-auth:
     image: mysql:8.0
     environment:
@@ -313,102 +56,7 @@ services:
       - "3307:3306"
     volumes:
       - mysql_auth_data:/var/lib/mysql
-    networks:
-      - wl-school-network
-
-  mysql-financial:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_financial
-    ports:
-      - "3308:3306"
-    volumes:
-      - mysql_financial_data:/var/lib/mysql
-    networks:
-      - wl-school-network
-
-  mysql-sports:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_sports
-    ports:
-      - "3309:3306"
-    volumes:
-      - mysql_sports_data:/var/lib/mysql
-    networks:
-      - wl-school-network
-
-  mysql-notification:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_notification
-    ports:
-      - "3310:3306"
-    volumes:
-      - mysql_notification_data:/var/lib/mysql
-    networks:
-      - wl-school-network
-
-  mysql-medical:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_medical
-    ports:
-      - "3311:3306"
-    volumes:
-      - mysql_medical_data:/var/lib/mysql
-    networks:
-      - wl-school-network
-
-  mysql-payroll:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_payroll
-    ports:
-      - "3312:3306"
-    volumes:
-      - mysql_payroll_data:/var/lib/mysql
-    networks:
-      - wl-school-network
-
-  mysql-report:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_report
-    ports:
-      - "3313:3306"
-    volumes:
-      - mysql_report_data:/var/lib/mysql
-    networks:
-      - wl-school-network
-
-  mysql-calendar:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_calendar
-    ports:
-      - "3314:3306"
-    volumes:
-      - mysql_calendar_data:/var/lib/mysql
-    networks:
-      - wl-school-network
-
-  mysql-customization:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: wl_school_customization
-    ports:
-      - "3315:3306"
-    volumes:
-      - mysql_customization_data:/var/lib/mysql
+      - ./database/migrations/auth_service.sql:/docker-entrypoint-initdb.d/auth_service.sql
     networks:
       - wl-school-network
 
@@ -427,14 +75,13 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - "8000:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf
       - ./nginx/conf.d:/etc/nginx/conf.d
       - ./storage/logs/nginx:/var/log/nginx
     depends_on:
-      - api-gateway
+      - auth-service
       - frontend-pwa
     networks:
       - wl-school-network
@@ -444,13 +91,13 @@ services:
     image: phpmyadmin/phpmyadmin
     environment:
       PMA_ARBITRARY: 1
-      PMA_HOST: mysql-main
+      PMA_HOST: mysql-auth
       PMA_USER: root
       PMA_PASSWORD: password
     ports:
       - "8080:80"
     depends_on:
-      - mysql-main
+      - mysql-auth
     networks:
       - wl-school-network
 
@@ -467,16 +114,7 @@ services:
       - wl-school-network
 
 volumes:
-  mysql_main_data:
   mysql_auth_data:
-  mysql_financial_data:
-  mysql_sports_data:
-  mysql_notification_data:
-  mysql_medical_data:
-  mysql_payroll_data:
-  mysql_report_data:
-  mysql_calendar_data:
-  mysql_customization_data:
   redis_data:
 
 networks:

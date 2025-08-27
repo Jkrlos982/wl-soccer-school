@@ -1,0 +1,17 @@
+# Development Dockerfile for React PWA with Hot Reload
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies (including dev dependencies)
+RUN npm install
+
+# Expose port for development server
+EXPOSE 3000
+
+# Start development server with hot reload
+CMD ["npm", "start"]

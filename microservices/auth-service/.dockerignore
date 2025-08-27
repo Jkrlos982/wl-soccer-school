@@ -1,0 +1,66 @@
+# Dependencies
+vendor
+node_modules
+composer.phar
+
+# Laravel specific
+.env
+.env.backup
+.env.production
+.phpunit.result.cache
+
+# Storage and cache
+storage/app/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/testing/*
+storage/framework/views/*
+storage/logs/*
+bootstrap/cache/*
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+Dockerfile.dev
+docker-compose*.yml
+
+# Documentation
+README.md
+*.md
+
+# Testing
+tests/
+phpunit.xml
+.phpunit.result.cache
+coverage
+
+# Logs
+logs
+*.log
+
+# Temporary files
+tmp
+temp
+
+# Build artifacts
+build
+dist
