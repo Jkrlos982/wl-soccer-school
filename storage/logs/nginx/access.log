@@ -2886,3 +2886,22 @@
         "jwt_school_id":"",
         "request_id":"fae539c04a45348be7ee47622ae089e4"
     }
+{
+        "timestamp":"2025-08-27T22:42:07+00:00",
+        "remote_addr":"192.168.65.1",
+        "remote_user":"",
+        "request":"GET /api/health HTTP/1.1",
+        "status":200,
+        "body_bytes_sent":93,
+        "http_referer":"",
+        "http_user_agent":"curl/8.7.1",
+        "http_x_forwarded_for":"",
+        "request_time":18.229,
+        "upstream_connect_time":"0.288",
+        "upstream_header_time":"18.206",
+        "upstream_response_time":"18.206",
+        "upstream_addr":"172.20.0.6:8000",
+        "jwt_user_id":"",
+        "jwt_school_id":"",
+        "request_id":"23d9777cd8e345186dea71f0fe5f8637"
+    }

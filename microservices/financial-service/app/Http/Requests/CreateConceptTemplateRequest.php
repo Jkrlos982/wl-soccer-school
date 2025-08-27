@@ -4,9 +4,9 @@ namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
-use App\Models\FinancialConcept;
+use App\Models\ConceptTemplate;
 
-class CreateFinancialConceptRequest extends FormRequest
+class CreateConceptTemplateRequest extends FormRequest
 {
     /**
      * Determine if the user is authorized to make this request.
@@ -39,7 +39,7 @@ class CreateFinancialConceptRequest extends FormRequest
                 'max:100',
                 'min:2',
                 'regex:/^[A-Z0-9_-]+$/',
-                Rule::unique('financial_concepts', 'code')
+                Rule::unique('concept_templates', 'code')
             ],
             'type' => [
                 'required',
@@ -49,21 +49,22 @@ class CreateFinancialConceptRequest extends FormRequest
                 'required',
                 'string',
                 'max:100',
-                'min:2',
-                Rule::in(['tuition', 'enrollment', 'other_income', 'salaries', 'services', 'supplies', 'maintenance', 'other_expenses'])
+                'min:2'
             ],
-            'school_id' => [
+            'default_amount' => [
                 'nullable',
-                'integer',
-                'min:1'
-            ],
-            'template_id' => [
-                'nullable',
-                'integer',
-                'exists:concept_templates,id'
+                'numeric',
+                'min:0'
             ],
             'is_active' => [
                 'boolean'
+            ],
+            'is_system' => [
+                'boolean'
+            ],
+            'metadata' => [
+                'nullable',
+                'array'
             ]
         ];
     }
@@ -74,7 +75,7 @@ class CreateFinancialConceptRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'name.required' => 'El nombre del concepto financiero es obligatorio.',
+            'name.required' => 'El nombre del template es obligatorio.',
             'name.string' => 'El nombre debe ser una cadena de texto.',
             'name.max' => 'El nombre no puede exceder los 255 caracteres.',
             'name.min' => 'El nombre debe tener al menos 3 caracteres.',
@@ -82,29 +83,28 @@ class CreateFinancialConceptRequest extends FormRequest
             'description.string' => 'La descripción debe ser una cadena de texto.',
             'description.max' => 'La descripción no puede exceder los 1000 caracteres.',
             
-            'code.required' => 'El código del concepto es obligatorio.',
+            'code.required' => 'El código del template es obligatorio.',
             'code.string' => 'El código debe ser una cadena de texto.',
             'code.max' => 'El código no puede exceder los 100 caracteres.',
             'code.min' => 'El código debe tener al menos 2 caracteres.',
             'code.regex' => 'El código solo puede contener letras mayúsculas, números, guiones y guiones bajos.',
-            'code.unique' => 'Ya existe un concepto financiero con este código.',
+            'code.unique' => 'Ya existe un template con este código.',
             
-            'type.required' => 'El tipo de concepto es obligatorio.',
+            'type.required' => 'El tipo de template es obligatorio.',
             'type.in' => 'El tipo debe ser ingreso (income) o gasto (expense).',
             
             'category.required' => 'La categoría es obligatoria.',
             'category.string' => 'La categoría debe ser una cadena de texto.',
             'category.max' => 'La categoría no puede exceder los 100 caracteres.',
             'category.min' => 'La categoría debe tener al menos 2 caracteres.',
-            'category.in' => 'La categoría seleccionada no es válida.',
             
-            'school_id.integer' => 'El ID de la escuela debe ser un número entero.',
-            'school_id.min' => 'El ID de la escuela debe ser mayor a 0.',
+            'default_amount.numeric' => 'El monto por defecto debe ser un número.',
+            'default_amount.min' => 'El monto por defecto debe ser mayor o igual a 0.',
             
-            'template_id.integer' => 'El ID del template debe ser un número entero.',
-            'template_id.exists' => 'El template seleccionado no existe.',
+            'is_active.boolean' => 'El estado activo debe ser verdadero o falso.',
+            'is_system.boolean' => 'El estado de sistema debe ser verdadero o falso.',
             
-            'is_active.boolean' => 'El estado activo debe ser verdadero o falso.'
+            'metadata.array' => 'Los metadatos deben ser un objeto JSON válido.'
         ];
     }
 
@@ -119,9 +119,10 @@ class CreateFinancialConceptRequest extends FormRequest
             'code' => 'código',
             'type' => 'tipo',
             'category' => 'categoría',
-            'school_id' => 'ID de escuela',
-            'template_id' => 'ID de template',
-            'is_active' => 'estado activo'
+            'default_amount' => 'monto por defecto',
+            'is_active' => 'estado activo',
+            'is_system' => 'estado de sistema',
+            'metadata' => 'metadatos'
         ];
     }
 
@@ -160,7 +161,8 @@ class CreateFinancialConceptRequest extends FormRequest
 
         // Establecer valores por defecto
         $this->merge([
-            'is_active' => $this->boolean('is_active', true)
+            'is_active' => $this->boolean('is_active', true),
+            'is_system' => $this->boolean('is_system', false)
         ]);
     }
 
@@ -192,24 +194,11 @@ class CreateFinancialConceptRequest extends FormRequest
                 $expenseCategories = ['salaries', 'services', 'supplies', 'maintenance', 'other_expenses'];
                 
                 if ($type === 'income' && !in_array($category, $incomeCategories)) {
-                    $validator->errors()->add('category', 'La categoría seleccionada no es válida para conceptos de ingreso.');
+                    $validator->errors()->add('category', 'La categoría seleccionada no es válida para templates de ingreso.');
                 }
                 
                 if ($type === 'expense' && !in_array($category, $expenseCategories)) {
-                    $validator->errors()->add('category', 'La categoría seleccionada no es válida para conceptos de gasto.');
-                }
-            }
-
-            // Validación personalizada: verificar que el template sea compatible con el tipo
-            if ($this->has('template_id') && $this->has('type')) {
-                $templateId = $this->template_id;
-                $type = $this->type;
-                
-                if ($templateId) {
-                    $template = \App\Models\ConceptTemplate::find($templateId);
-                    if ($template && $template->type !== $type) {
-                        $validator->errors()->add('template_id', 'El template seleccionado no es compatible con el tipo de concepto.');
-                    }
+                    $validator->errors()->add('category', 'La categoría seleccionada no es válida para templates de gasto.');
                 }
             }
         });
