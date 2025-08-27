@@ -32,7 +32,7 @@ services:
   financial-service:
     build:
       context: ./microservices/financial-service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     ports:
       - "8002:8000"
     environment:
@@ -54,6 +54,8 @@ services:
     volumes:
       - ./microservices/financial-service:/var/www/html
       - ./storage/logs/financial:/var/www/html/storage/logs
+      - /var/www/html/vendor
+      - /var/www/html/node_modules
 
   # Frontend PWA
   frontend-pwa:

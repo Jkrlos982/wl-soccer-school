@@ -150,3 +150,4 @@
 192.168.65.1 - - [27/Aug/2025:20:08:00 +0000] "POST /api/auth/login HTTP/1.1" 401 108 "-" "curl/8.7.1" "-" rt=0.202 uct="0.000" uht="0.202" urt="0.202"
 192.168.65.1 - - [27/Aug/2025:20:08:06 +0000] "OPTIONS /api/auth/login HTTP/1.1" 204 0 "-" "curl/8.7.1" "-" rt=0.000 uct="-" uht="-" urt="-"
 192.168.65.1 - - [27/Aug/2025:20:10:28 +0000] "POST /api/auth/login HTTP/1.1" 200 2300 "http://localhost:3000/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" "-" rt=0.429 uct="0.001" uht="0.429" urt="0.429"
+192.168.65.1 - - [27/Aug/2025:22:42:07 +0000] "GET /api/health HTTP/1.1" 200 93 "-" "curl/8.7.1" "-" rt=18.229 uct="0.288" uht="18.206" urt="18.206"

@@ -6,7 +6,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use App\Models\FinancialConcept;
 
-class CreateFinancialConceptRequest extends FormRequest
+class UpdateFinancialConceptRequest extends FormRequest
 {
     /**
      * Determine if the user is authorized to make this request.
@@ -21,31 +21,38 @@ class CreateFinancialConceptRequest extends FormRequest
      */
     public function rules(): array
     {
+        $conceptId = $this->route('concept') ?? $this->route('id');
+        
         return [
             'name' => [
+                'sometimes',
                 'required',
                 'string',
                 'max:255',
                 'min:3'
             ],
             'description' => [
+                'sometimes',
                 'nullable',
                 'string',
                 'max:1000'
             ],
             'code' => [
+                'sometimes',
                 'required',
                 'string',
                 'max:100',
                 'min:2',
                 'regex:/^[A-Z0-9_-]+$/',
-                Rule::unique('financial_concepts', 'code')
+                Rule::unique('financial_concepts', 'code')->ignore($conceptId)
             ],
             'type' => [
+                'sometimes',
                 'required',
                 Rule::in(['income', 'expense'])
             ],
             'category' => [
+                'sometimes',
                 'required',
                 'string',
                 'max:100',
@@ -53,16 +60,19 @@ class CreateFinancialConceptRequest extends FormRequest
                 Rule::in(['tuition', 'enrollment', 'other_income', 'salaries', 'services', 'supplies', 'maintenance', 'other_expenses'])
             ],
             'school_id' => [
+                'sometimes',
                 'nullable',
                 'integer',
                 'min:1'
             ],
             'template_id' => [
+                'sometimes',
                 'nullable',
                 'integer',
                 'exists:concept_templates,id'
             ],
             'is_active' => [
+                'sometimes',
                 'boolean'
             ]
         ];
@@ -157,11 +167,6 @@ class CreateFinancialConceptRequest extends FormRequest
                 'category' => trim($this->category)
             ]);
         }
-
-        // Establecer valores por defecto
-        $this->merge([
-            'is_active' => $this->boolean('is_active', true)
-        ]);
     }
 
     /**
@@ -209,6 +214,22 @@ class CreateFinancialConceptRequest extends FormRequest
                     $template = \App\Models\ConceptTemplate::find($templateId);
                     if ($template && $template->type !== $type) {
                         $validator->errors()->add('template_id', 'El template seleccionado no es compatible con el tipo de concepto.');
+                    }
+                }
+            }
+
+            // Validación personalizada: no permitir modificar conceptos por defecto del sistema
+            $conceptId = $this->route('concept') ?? $this->route('id');
+            if ($conceptId) {
+                $concept = FinancialConcept::find($conceptId);
+                if ($concept && $concept->is_default) {
+                    // Solo permitir cambiar el estado activo en conceptos por defecto
+                    $allowedFields = ['is_active'];
+                    $requestFields = array_keys($this->all());
+                    $restrictedFields = array_diff($requestFields, $allowedFields);
+                    
+                    if (!empty($restrictedFields)) {
+                        $validator->errors()->add('general', 'No se pueden modificar los conceptos por defecto del sistema, solo su estado activo.');
                     }
                 }
             }
