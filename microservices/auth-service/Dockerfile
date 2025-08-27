@@ -1,4 +1,4 @@
-FROM php:8.2-fpm
+FROM php:8.3-fpm
 
 # Set working directory
 WORKDIR /var/www/html
@@ -51,7 +51,7 @@ COPY . /var/www/html
 COPY --chown=www-data:www-data . /var/www/html
 
 # Install PHP dependencies
-RUN composer update --no-dev --optimize-autoloader --no-interaction
+RUN composer install --no-dev --optimize-autoloader --no-interaction
 
 # Create necessary directories
 RUN mkdir -p /var/www/html/storage/logs \

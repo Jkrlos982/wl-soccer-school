@@ -1,0 +1,140 @@
+version: '3.8'
+
+services:
+  # Auth Service - Development
+  auth-service:
+    build:
+      context: ./microservices/auth-service
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8001:8000"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql-auth
+      - DB_PORT=3306
+      - DB_DATABASE=wl_school_auth
+      - DB_USERNAME=root
+      - DB_PASSWORD=password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - mysql-auth
+      - redis
+    networks:
+      - wl-school-network
+    volumes:
+      # Mount source code for hot reload
+      - ./microservices/auth-service:/var/www/html
+      # Exclude vendor and node_modules to avoid conflicts
+      - /var/www/html/vendor
+      - /var/www/html/node_modules
+      # Mount logs
+      - ./storage/logs/auth:/var/www/html/storage/logs
+    # Enable file watching for Laravel
+    command: ["/usr/local/bin/entrypoint.sh", "php-fpm"]
+
+  # Frontend PWA - Development
+  frontend-pwa:
+    build:
+      context: ./frontend-pwa
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_AUTH_SERVICE_URL=http://localhost:8001
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+      - FAST_REFRESH=true
+    depends_on:
+      - auth-service
+    networks:
+      - wl-school-network
+    volumes:
+      # Mount source code for hot reload
+      - ./frontend-pwa:/app
+      # Exclude node_modules to avoid conflicts
+      - /app/node_modules
+    stdin_open: true
+    tty: true
+
+  # Auth Database
+  mysql-auth:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: wl_school_auth
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_auth_data:/var/lib/mysql
+      - ./database/migrations/auth_service.sql:/docker-entrypoint-initdb.d/auth_service.sql
+    networks:
+      - wl-school-network
+    command: --default-authentication-plugin=mysql_native_password
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - wl-school-network
+    command: redis-server --appendonly yes
+
+  # Nginx Load Balancer - Development
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./storage/logs/nginx:/var/log/nginx
+    depends_on:
+      - auth-service
+      - frontend-pwa
+    networks:
+      - wl-school-network
+
+  # phpMyAdmin for database management
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    environment:
+      PMA_ARBITRARY: 1
+      PMA_HOST: mysql-auth
+      PMA_USER: root
+      PMA_PASSWORD: password
+    ports:
+      - "8080:80"
+    depends_on:
+      - mysql-auth
+    networks:
+      - wl-school-network
+
+  # Redis Commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - wl-school-network
+
+volumes:
+  mysql_auth_data:
+  redis_data:
+
+networks:
+  wl-school-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

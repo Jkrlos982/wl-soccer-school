@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -47,8 +47,8 @@ const LoadingScreen: React.FC = () => (
   </Box>
 );
 
-// App content component that uses auth
-const AppContent: React.FC = () => {
+// Auth wrapper component that uses auth inside Router context
+const AuthWrapper: React.FC = () => {
   const { isLoading } = useAuth();
 
   // Show loading screen while auth is initializing
@@ -57,30 +57,37 @@ const AppContent: React.FC = () => {
   }
 
   return (
+    <Routes>
+      {/* Public Routes */}
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      
+      {/* Protected Routes */}
+      <Route 
+        path="/dashboard" 
+        element={
+          <ProtectedRoute>
+            <DashboardPage />
+          </ProtectedRoute>
+        } 
+      />
+      
+      {/* Default Route - Redirect to login */}
+      <Route path="/" element={<Navigate to="/login" replace />} />
+      
+      {/* Catch all route - Redirect to login */}
+      <Route path="*" element={<Navigate to="/login" replace />} />
+    </Routes>
+  );
+};
+
+// App content component
+const AppContent: React.FC = () => {
+  return (
     <Router>
-      <Routes>
-        {/* Public Routes */}
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
-        
-        {/* Protected Routes */}
-        <Route 
-          path="/dashboard" 
-          element={
-            <ProtectedRoute>
-              <DashboardPage />
-            </ProtectedRoute>
-          } 
-        />
-        
-        {/* Default Route - Redirect to login */}
-        <Route path="/" element={<Navigate to="/login" replace />} />
-        
-        {/* Catch all route - Redirect to login */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
+      <AuthWrapper />
     </Router>
   );
 };
