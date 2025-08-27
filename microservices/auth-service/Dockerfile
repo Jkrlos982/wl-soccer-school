@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     libjpeg62-turbo-dev \
     libmcrypt-dev \
     libgd-dev \
+    libicu-dev \
     jpegoptim optipng pngquant gifsicle \
     vim \
     nano \
@@ -50,7 +51,7 @@ COPY . /var/www/html
 COPY --chown=www-data:www-data . /var/www/html
 
 # Install PHP dependencies
-RUN composer install --no-dev --optimize-autoloader --no-interaction
+RUN composer update --no-dev --optimize-autoloader --no-interaction
 
 # Create necessary directories
 RUN mkdir -p /var/www/html/storage/logs \

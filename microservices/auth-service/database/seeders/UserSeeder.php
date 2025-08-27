@@ -22,7 +22,7 @@ class UserSeeder extends Seeder
         // Create roles if they don't exist
         $roles = ['super_admin', 'admin', 'teacher', 'student', 'parent'];
         foreach ($roles as $roleName) {
-            Role::firstOrCreate(['name' => $roleName]);
+            Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'api']);
         }
 
         // Create permissions if they don't exist
@@ -42,7 +42,7 @@ class UserSeeder extends Seeder
         ];
         
         foreach ($permissions as $permissionName) {
-            Permission::firstOrCreate(['name' => $permissionName]);
+            Permission::firstOrCreate(['name' => $permissionName, 'guard_name' => 'api']);
         }
 
         // Get schools
@@ -67,8 +67,9 @@ class UserSeeder extends Seeder
                 'last_login_at' => Carbon::now()->subDays(1)
                 ]
             );
-            $superAdmin->assignRole('super_admin');
-            $superAdmin->givePermissionTo(Permission::all());
+            $superAdminRole = Role::where('name', 'super_admin')->where('guard_name', 'api')->first();
+            $superAdmin->assignRole($superAdminRole);
+            $superAdmin->givePermissionTo(Permission::where('guard_name', 'api')->get());
 
             // School Admin
             $admin = User::firstOrCreate(
@@ -85,8 +86,11 @@ class UserSeeder extends Seeder
                 'last_login_at' => Carbon::now()->subHours(2)
                 ]
             );
-            $admin->assignRole('admin');
-            $admin->givePermissionTo(['manage_users', 'manage_finances', 'manage_sports', 'view_dashboard', 'view_reports']);
+            $adminRole = Role::where('name', 'admin')->where('guard_name', 'api')->first();
+            $admin->assignRole($adminRole);
+            $adminPermissions = Permission::whereIn('name', ['manage_users', 'manage_finances', 'manage_sports', 'view_dashboard', 'view_reports'])
+                ->where('guard_name', 'api')->get();
+            $admin->givePermissionTo($adminPermissions);
 
             // Teacher
             $teacher = User::firstOrCreate(
@@ -103,8 +107,11 @@ class UserSeeder extends Seeder
                 'last_login_at' => Carbon::now()->subMinutes(30)
                 ]
             );
-            $teacher->assignRole('teacher');
-            $teacher->givePermissionTo(['view_students', 'manage_calendar', 'view_dashboard']);
+            $teacherRole = Role::where('name', 'teacher')->where('guard_name', 'api')->first();
+            $teacher->assignRole($teacherRole);
+            $teacherPermissions = Permission::whereIn('name', ['view_students', 'manage_calendar', 'view_dashboard'])
+                ->where('guard_name', 'api')->get();
+            $teacher->givePermissionTo($teacherPermissions);
 
             // Student
             $student = User::firstOrCreate(
@@ -121,8 +128,11 @@ class UserSeeder extends Seeder
                 'last_login_at' => Carbon::now()->subMinutes(10)
                 ]
             );
-            $student->assignRole('student');
-            $student->givePermissionTo(['view_dashboard', 'edit_profile']);
+            $studentRole = Role::where('name', 'student')->where('guard_name', 'api')->first();
+            $student->assignRole($studentRole);
+            $studentPermissions = Permission::whereIn('name', ['view_dashboard', 'edit_profile'])
+                ->where('guard_name', 'api')->get();
+            $student->givePermissionTo($studentPermissions);
 
             // Parent
             $parent = User::firstOrCreate(
@@ -139,8 +149,11 @@ class UserSeeder extends Seeder
                 'last_login_at' => Carbon::now()->subHours(1)
                 ]
             );
-            $parent->assignRole('parent');
-            $parent->givePermissionTo(['view_dashboard', 'edit_profile']);
+            $parentRole = Role::where('name', 'parent')->where('guard_name', 'api')->first();
+            $parent->assignRole($parentRole);
+            $parentPermissions = Permission::whereIn('name', ['view_dashboard', 'edit_profile'])
+                ->where('guard_name', 'api')->get();
+            $parent->givePermissionTo($parentPermissions);
         }
 
         // Create admin for San José School
@@ -159,8 +172,11 @@ class UserSeeder extends Seeder
                 'last_login_at' => Carbon::now()->subDays(2)
                 ]
             );
-            $sanJoseAdmin->assignRole('admin');
-            $sanJoseAdmin->givePermissionTo(['manage_users', 'view_dashboard', 'view_reports']);
+            $adminRole = Role::where('name', 'admin')->where('guard_name', 'api')->first();
+            $sanJoseAdmin->assignRole($adminRole);
+            $sanJosePermissions = Permission::whereIn('name', ['manage_users', 'view_dashboard', 'view_reports'])
+                ->where('guard_name', 'api')->get();
+            $sanJoseAdmin->givePermissionTo($sanJosePermissions);
         }
 
         // Create admin for Bilingüe School
@@ -179,8 +195,11 @@ class UserSeeder extends Seeder
                 'last_login_at' => Carbon::now()->subHours(3)
                 ]
             );
-            $bilingueAdmin->assignRole('admin');
-            $bilingueAdmin->givePermissionTo(['manage_users', 'manage_finances', 'view_dashboard', 'view_reports']);
+            $adminRole = Role::where('name', 'admin')->where('guard_name', 'api')->first();
+            $bilingueAdmin->assignRole($adminRole);
+            $bilinguePermissions = Permission::whereIn('name', ['manage_users', 'manage_finances', 'view_dashboard', 'view_reports'])
+                ->where('guard_name', 'api')->get();
+            $bilingueAdmin->givePermissionTo($bilinguePermissions);
         }
     }
 }
