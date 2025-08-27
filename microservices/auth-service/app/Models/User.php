@@ -305,11 +305,7 @@ class User extends Authenticatable implements JWTSubject, MustVerifyEmail
     {
         parent::boot();
 
-        // Automatically assign default role when user is created
-        static::created(function ($user) {
-            if (!$user->roles()->exists()) {
-                $user->assignRole('student'); // Default role
-            }
-        });
+        // Note: Default role assignment should be handled in seeders or controllers
+        // to avoid issues in testing environments where roles may not exist yet
     }
 }
