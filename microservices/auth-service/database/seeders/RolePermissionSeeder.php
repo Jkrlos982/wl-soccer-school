@@ -206,7 +206,7 @@ class RolePermissionSeeder extends Seeder
     {
         // Super Admin - All permissions
         $superAdmin = Role::where('name', 'super_admin')->first();
-        $superAdmin->givePermissionTo(Permission::all());
+        $superAdmin->givePermissionTo(Permission::where('guard_name', 'api')->get());
 
         // School Admin - All permissions except system administration
         $schoolAdmin = Role::where('name', 'school_admin')->first();
@@ -324,6 +324,7 @@ class RolePermissionSeeder extends Seeder
         ]);
 
         // Assign super admin role
-        $superAdmin->assignRole('super_admin');
+        $superAdminRole = Role::where('name', 'super_admin')->where('guard_name', 'api')->first();
+        $superAdmin->assignRole($superAdminRole);
     }
 }
