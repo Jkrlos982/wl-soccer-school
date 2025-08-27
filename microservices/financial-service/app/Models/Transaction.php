@@ -22,16 +22,21 @@ class Transaction extends Model
         'status',
         'payment_method',
         'metadata',
-        'created_by'
+        'created_by',
+        'approved_by',
+        'approved_at',
+        'approval_notes'
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
         'transaction_date' => 'date',
+        'approved_at' => 'datetime',
         'metadata' => 'array',
         'school_id' => 'integer',
         'financial_concept_id' => 'integer',
-        'created_by' => 'integer'
+        'created_by' => 'integer',
+        'approved_by' => 'integer'
     ];
 
     /**
@@ -82,5 +87,63 @@ class Transaction extends Model
     public function scopeBetweenDates($query, $startDate, $endDate)
     {
         return $query->whereBetween('transaction_date', [$startDate, $endDate]);
+    }
+
+    /**
+     * Scope a query to filter pending transactions.
+     */
+    public function scopePending($query)
+    {
+        return $query->where('status', 'pending');
+    }
+
+    /**
+     * Scope a query to filter approved transactions.
+     */
+    public function scopeApproved($query)
+    {
+        return $query->where('status', 'approved');
+    }
+
+    /**
+     * Scope a query to filter by financial concept type.
+     */
+    public function scopeByConceptType($query, $type)
+    {
+        return $query->whereHas('financialConcept', function ($q) use ($type) {
+            $q->where('type', $type);
+        });
+    }
+
+    /**
+     * Check if transaction is pending approval.
+     */
+    public function isPending(): bool
+    {
+        return $this->status === 'pending';
+    }
+
+    /**
+     * Check if transaction is approved.
+     */
+    public function isApproved(): bool
+    {
+        return $this->status === 'approved';
+    }
+
+    /**
+     * Check if transaction can be approved.
+     */
+    public function canBeApproved(): bool
+    {
+        return $this->status === 'pending';
+    }
+
+    /**
+     * Check if transaction can be rejected.
+     */
+    public function canBeRejected(): bool
+    {
+        return in_array($this->status, ['pending', 'approved']);
     }
 }
