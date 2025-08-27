@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y \
     nano \
     supervisor \
     cron \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # Install PHP extensions
@@ -68,6 +69,9 @@ RUN chown -R www-data:www-data /var/www/html \
 # Copy PHP configuration
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
 
+# Copy nginx configuration
+COPY docker/nginx/nginx.conf /etc/nginx/sites-available/default
+
 # Copy supervisor configuration
 COPY docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
@@ -75,10 +79,10 @@ COPY docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Expose port 9000 and start php-fpm server
-EXPOSE 9000
+# Expose port 8000 for nginx
+EXPOSE 8000
 
 # Set entrypoint
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-CMD ["php-fpm"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

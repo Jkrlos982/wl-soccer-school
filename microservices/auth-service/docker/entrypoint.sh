@@ -90,7 +90,7 @@ php artisan storage:link || true
 # Generate JWT secret if not exists
 if [ -z "$JWT_SECRET" ]; then
     echo -e "${YELLOW}🔑 Generating JWT secret...${NC}"
-    php artisan jwt:secret
+    php artisan jwt:secret --force
 fi
 
 # Install/update Passport keys if needed
