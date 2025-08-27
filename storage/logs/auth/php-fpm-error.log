@@ -206,3 +206,5 @@
 127.0.0.1 -  27/Aug/2025:20:10:28 +0000 "POST /index.php" 200
 127.0.0.1 -  27/Aug/2025:20:10:27 +0000 "POST /index.php" 200
 127.0.0.1 -  27/Aug/2025:20:10:31 +0000 "POST /index.php" 200
+[27-Aug-2025 21:02:34] NOTICE: fpm is running, pid 53
+[27-Aug-2025 21:02:34] NOTICE: ready to handle connections
