@@ -1,0 +1,482 @@
+name: Service Monitoring & Health Checks
+
+on:
+  schedule:
+    # Run health checks every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to monitor'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - development
+      check_type:
+        description: 'Type of check to perform'
+        required: true
+        default: 'health'
+        type: choice
+        options:
+          - health
+          - performance
+          - security
+          - full
+
+env:
+  MONITORING_TIMEOUT: 30
+  MAX_RESPONSE_TIME: 5000
+  ALERT_THRESHOLD: 3
+
+jobs:
+  # Job para detectar servicios y endpoints
+  detect-endpoints:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.services.outputs.matrix }}
+      endpoints: ${{ steps.endpoints.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Detect services
+        id: services
+        run: |
+          # Detectar servicios Laravel
+          services=$(find services -name "composer.json" -type f | sed 's|/composer.json||' | sed 's|services/||' | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=$services" >> $GITHUB_OUTPUT
+          echo "Found services: $services"
+      
+      - name: Generate monitoring endpoints
+        id: endpoints
+        run: |
+          # Generar endpoints basados en el entorno
+          case "${{ github.event.inputs.environment || 'production' }}" in
+            "production")
+              base_url="https://api.wl-school.com"
+              frontend_url="https://wl-school.com"
+              ;;
+            "staging")
+              base_url="https://staging-api.wl-school.com"
+              frontend_url="https://staging.wl-school.com"
+              ;;
+            "development")
+              base_url="http://localhost:8080"
+              frontend_url="http://localhost:3000"
+              ;;
+          esac
+          
+          # Crear matriz de endpoints
+          endpoints='[
+            {"name": "api-gateway", "url": "'$base_url'/health", "type": "api"},
+            {"name": "auth-service", "url": "'$base_url'/auth/health", "type": "api"},
+            {"name": "financial-service", "url": "'$base_url'/financial/health", "type": "api"},
+            {"name": "sports-service", "url": "'$base_url'/sports/health", "type": "api"},
+            {"name": "notification-service", "url": "'$base_url'/notifications/health", "type": "api"},
+            {"name": "medical-service", "url": "'$base_url'/medical/health", "type": "api"},
+            {"name": "payroll-service", "url": "'$base_url'/payroll/health", "type": "api"},
+            {"name": "report-service", "url": "'$base_url'/reports/health", "type": "api"},
+            {"name": "customization-service", "url": "'$base_url'/customization/health", "type": "api"},
+            {"name": "calendar-service", "url": "'$base_url'/calendar/health", "type": "api"},
+            {"name": "frontend", "url": "'$frontend_url'", "type": "web"}
+          ]'
+          
+          echo "matrix=$(echo $endpoints | jq -c .)" >> $GITHUB_OUTPUT
+
+  # Job para health checks básicos
+  health-check:
+    needs: detect-endpoints
+    if: github.event.inputs.check_type == 'health' || github.event.inputs.check_type == 'full' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        endpoint: ${{ fromJson(needs.detect-endpoints.outputs.endpoints) }}
+      fail-fast: false
+    
+    steps:
+      - name: Health Check - ${{ matrix.endpoint.name }}
+        id: health
+        run: |
+          echo "Checking health of ${{ matrix.endpoint.name }} at ${{ matrix.endpoint.url }}"
+          
+          # Realizar health check con timeout
+          start_time=$(date +%s%3N)
+          
+          if curl -f -s -m ${{ env.MONITORING_TIMEOUT }} "${{ matrix.endpoint.url }}" > response.json; then
+            end_time=$(date +%s%3N)
+            response_time=$((end_time - start_time))
+            
+            echo "status=healthy" >> $GITHUB_OUTPUT
+            echo "response_time=$response_time" >> $GITHUB_OUTPUT
+            echo "✅ ${{ matrix.endpoint.name }} is healthy (${response_time}ms)"
+            
+            # Verificar tiempo de respuesta
+            if [ $response_time -gt ${{ env.MAX_RESPONSE_TIME }} ]; then
+              echo "⚠️ Slow response time: ${response_time}ms > ${{ env.MAX_RESPONSE_TIME }}ms"
+              echo "performance_warning=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+            echo "❌ ${{ matrix.endpoint.name }} is unhealthy"
+            
+            # Intentar obtener más información del error
+            curl -v -m ${{ env.MONITORING_TIMEOUT }} "${{ matrix.endpoint.url }}" || true
+          fi
+      
+      - name: Store health check result
+        run: |
+          mkdir -p health-results
+          echo '{
+            "service": "${{ matrix.endpoint.name }}",
+            "url": "${{ matrix.endpoint.url }}",
+            "status": "${{ steps.health.outputs.status }}",
+            "response_time": "${{ steps.health.outputs.response_time }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "environment": "${{ github.event.inputs.environment || 'production' }}"
+          }' > health-results/${{ matrix.endpoint.name }}.json
+      
+      - name: Upload health results
+        uses: actions/upload-artifact@v3
+        with:
+          name: health-results
+          path: health-results/
+
+  # Job para performance testing
+  performance-check:
+    needs: detect-endpoints
+    if: github.event.inputs.check_type == 'performance' || github.event.inputs.check_type == 'full'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        endpoint: ${{ fromJson(needs.detect-endpoints.outputs.endpoints) }}
+      fail-fast: false
+    
+    steps:
+      - name: Install performance testing tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apache2-utils
+      
+      - name: Performance Test - ${{ matrix.endpoint.name }}
+        id: perf
+        run: |
+          echo "Running performance test for ${{ matrix.endpoint.name }}"
+          
+          # Ejecutar test de carga con ab (Apache Bench)
+          if [ "${{ matrix.endpoint.type }}" = "api" ]; then
+            # Para APIs, hacer 100 requests con concurrencia de 10
+            ab -n 100 -c 10 -g performance.tsv "${{ matrix.endpoint.url }}" > performance.txt 2>&1 || true
+          else
+            # Para frontend, hacer test más ligero
+            ab -n 50 -c 5 -g performance.tsv "${{ matrix.endpoint.url }}" > performance.txt 2>&1 || true
+          fi
+          
+          # Extraer métricas clave
+          if [ -f performance.txt ]; then
+            avg_time=$(grep "Time per request" performance.txt | head -1 | awk '{print $4}')
+            requests_per_sec=$(grep "Requests per second" performance.txt | awk '{print $4}')
+            failed_requests=$(grep "Failed requests" performance.txt | awk '{print $3}')
+            
+            echo "avg_response_time=$avg_time" >> $GITHUB_OUTPUT
+            echo "requests_per_second=$requests_per_sec" >> $GITHUB_OUTPUT
+            echo "failed_requests=$failed_requests" >> $GITHUB_OUTPUT
+            
+            echo "📊 Performance Results for ${{ matrix.endpoint.name }}:"
+            echo "   Average Response Time: ${avg_time}ms"
+            echo "   Requests per Second: $requests_per_sec"
+            echo "   Failed Requests: $failed_requests"
+          fi
+      
+      - name: Store performance results
+        run: |
+          mkdir -p performance-results
+          echo '{
+            "service": "${{ matrix.endpoint.name }}",
+            "url": "${{ matrix.endpoint.url }}",
+            "avg_response_time": "${{ steps.perf.outputs.avg_response_time }}",
+            "requests_per_second": "${{ steps.perf.outputs.requests_per_second }}",
+            "failed_requests": "${{ steps.perf.outputs.failed_requests }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "environment": "${{ github.event.inputs.environment || 'production' }}"
+          }' > performance-results/${{ matrix.endpoint.name }}.json
+      
+      - name: Upload performance results
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-results
+          path: performance-results/
+
+  # Job para security checks
+  security-check:
+    needs: detect-endpoints
+    if: github.event.inputs.check_type == 'security' || github.event.inputs.check_type == 'full'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        endpoint: ${{ fromJson(needs.detect-endpoints.outputs.endpoints) }}
+      fail-fast: false
+    
+    steps:
+      - name: Install security testing tools
+        run: |
+          # Instalar herramientas de seguridad
+          sudo apt-get update
+          sudo apt-get install -y nmap nikto
+          
+          # Instalar SSLyze para análisis SSL
+          pip install sslyze
+      
+      - name: Security Scan - ${{ matrix.endpoint.name }}
+        id: security
+        run: |
+          echo "Running security scan for ${{ matrix.endpoint.name }}"
+          
+          # Extraer host y puerto de la URL
+          host=$(echo "${{ matrix.endpoint.url }}" | sed -E 's|^https?://([^/]+).*|\1|')
+          
+          # Verificar headers de seguridad
+          echo "🔍 Checking security headers..."
+          curl -I -s "${{ matrix.endpoint.url }}" > headers.txt
+          
+          # Verificar headers importantes
+          security_score=0
+          
+          if grep -qi "x-frame-options" headers.txt; then
+            security_score=$((security_score + 1))
+            echo "✅ X-Frame-Options header present"
+          else
+            echo "❌ X-Frame-Options header missing"
+          fi
+          
+          if grep -qi "x-content-type-options" headers.txt; then
+            security_score=$((security_score + 1))
+            echo "✅ X-Content-Type-Options header present"
+          else
+            echo "❌ X-Content-Type-Options header missing"
+          fi
+          
+          if grep -qi "strict-transport-security" headers.txt; then
+            security_score=$((security_score + 1))
+            echo "✅ HSTS header present"
+          else
+            echo "❌ HSTS header missing"
+          fi
+          
+          if grep -qi "content-security-policy" headers.txt; then
+            security_score=$((security_score + 1))
+            echo "✅ CSP header present"
+          else
+            echo "❌ CSP header missing"
+          fi
+          
+          echo "security_score=$security_score" >> $GITHUB_OUTPUT
+          
+          # SSL/TLS check para HTTPS
+          if [[ "${{ matrix.endpoint.url }}" == https* ]]; then
+            echo "🔒 Checking SSL/TLS configuration..."
+            sslyze --regular $host > ssl_report.txt 2>&1 || true
+            
+            if grep -q "VULNERABLE" ssl_report.txt; then
+              echo "⚠️ SSL vulnerabilities detected"
+              echo "ssl_vulnerable=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ SSL configuration looks good"
+              echo "ssl_vulnerable=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+      
+      - name: Store security results
+        run: |
+          mkdir -p security-results
+          echo '{
+            "service": "${{ matrix.endpoint.name }}",
+            "url": "${{ matrix.endpoint.url }}",
+            "security_score": "${{ steps.security.outputs.security_score }}",
+            "ssl_vulnerable": "${{ steps.security.outputs.ssl_vulnerable }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "environment": "${{ github.event.inputs.environment || 'production' }}"
+          }' > security-results/${{ matrix.endpoint.name }}.json
+      
+      - name: Upload security results
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-results
+          path: security-results/
+
+  # Job para generar reportes y alertas
+  generate-report:
+    needs: [health-check, performance-check, security-check]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v3
+        with:
+          path: monitoring-results
+      
+      - name: Generate monitoring report
+        run: |
+          echo "# 📊 Monitoring Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment || 'production' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Check Type:** ${{ github.event.inputs.check_type || 'health' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Health Check Results
+          if [ -d "monitoring-results/health-results" ]; then
+            echo "## 🏥 Health Check Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | Status | Response Time |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|--------|---------------|" >> $GITHUB_STEP_SUMMARY
+            
+            for result in monitoring-results/health-results/*.json; do
+              if [ -f "$result" ]; then
+                service=$(jq -r '.service' "$result")
+                status=$(jq -r '.status' "$result")
+                response_time=$(jq -r '.response_time' "$result")
+                
+                if [ "$status" = "healthy" ]; then
+                  status_icon="✅"
+                else
+                  status_icon="❌"
+                fi
+                
+                echo "| $service | $status_icon $status | ${response_time}ms |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Performance Results
+          if [ -d "monitoring-results/performance-results" ]; then
+            echo "## 🚀 Performance Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | Avg Response Time | Requests/sec | Failed Requests |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|-------------------|--------------|-----------------|" >> $GITHUB_STEP_SUMMARY
+            
+            for result in monitoring-results/performance-results/*.json; do
+              if [ -f "$result" ]; then
+                service=$(jq -r '.service' "$result")
+                avg_time=$(jq -r '.avg_response_time' "$result")
+                rps=$(jq -r '.requests_per_second' "$result")
+                failed=$(jq -r '.failed_requests' "$result")
+                
+                echo "| $service | ${avg_time}ms | $rps | $failed |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Security Results
+          if [ -d "monitoring-results/security-results" ]; then
+            echo "## 🔒 Security Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | Security Score | SSL Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|----------------|------------|" >> $GITHUB_STEP_SUMMARY
+            
+            for result in monitoring-results/security-results/*.json; do
+              if [ -f "$result" ]; then
+                service=$(jq -r '.service' "$result")
+                score=$(jq -r '.security_score' "$result")
+                ssl=$(jq -r '.ssl_vulnerable' "$result")
+                
+                if [ "$ssl" = "false" ] || [ "$ssl" = "null" ]; then
+                  ssl_icon="✅"
+                else
+                  ssl_icon="⚠️"
+                fi
+                
+                echo "| $service | $score/4 | $ssl_icon |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Check for alerts
+        id: alerts
+        run: |
+          alert_count=0
+          
+          # Verificar servicios no saludables
+          if [ -d "monitoring-results/health-results" ]; then
+            for result in monitoring-results/health-results/*.json; do
+              if [ -f "$result" ]; then
+                status=$(jq -r '.status' "$result")
+                if [ "$status" != "healthy" ]; then
+                  alert_count=$((alert_count + 1))
+                fi
+              fi
+            done
+          fi
+          
+          echo "alert_count=$alert_count" >> $GITHUB_OUTPUT
+          
+          if [ $alert_count -gt 0 ]; then
+            echo "🚨 $alert_count service(s) are unhealthy!"
+          else
+            echo "✅ All services are healthy"
+          fi
+      
+      - name: Create incident issue
+        if: steps.alerts.outputs.alert_count > 0
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const alertCount = ${{ steps.alerts.outputs.alert_count }};
+            const environment = '${{ github.event.inputs.environment || "production" }}';
+            
+            const title = `🚨 Service Health Alert - ${alertCount} service(s) down in ${environment}`;
+            const body = `
+            ## Service Health Alert
+            
+            **Environment:** ${environment}
+            **Alert Count:** ${alertCount}
+            **Detected:** ${new Date().toISOString()}
+            
+            ### Action Required
+            
+            Multiple services are reporting as unhealthy. Please investigate immediately.
+            
+            ### Monitoring Details
+            
+            Check the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId}) for detailed results.
+            
+            ---
+            
+            🤖 This issue was created automatically by the monitoring system.
+            `;
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['incident', 'monitoring', 'urgent', environment]
+            });
+      
+      - name: Store monitoring data
+        run: |
+          # Crear archivo consolidado de métricas
+          mkdir -p monitoring-data
+          
+          echo '{
+            "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+            "environment": "'${{ github.event.inputs.environment || 'production' }}'",
+            "check_type": "'${{ github.event.inputs.check_type || 'health' }}'",
+            "alert_count": '${{ steps.alerts.outputs.alert_count }}',
+            "workflow_run": "'${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}'"
+          }' > monitoring-data/summary.json
+      
+      - name: Upload monitoring data
+        uses: actions/upload-artifact@v3
+        with:
+          name: monitoring-data
+          path: monitoring-data/
+          retention-days: 30

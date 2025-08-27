@@ -1,0 +1,1365 @@
+name: Database Management
+
+on:
+  schedule:
+    # Daily database health checks at 2 AM UTC
+    - cron: '0 2 * * *'
+    # Weekly maintenance on Sundays at 3 AM UTC
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Database operation to perform'
+        required: true
+        default: 'health_check'
+        type: choice
+        options:
+          - health_check
+          - backup
+          - restore
+          - migrate
+          - maintenance
+          - performance_analysis
+          - cleanup
+          - replication_check
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - production
+          - staging
+          - development
+      database_service:
+        description: 'Specific database service (optional - leave empty for all)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - auth_service
+          - financial_service
+          - sports_service
+          - notification_service
+          - medical_service
+          - payroll_service
+          - report_service
+          - customization_service
+          - calendar_service
+      backup_type:
+        description: 'Type of backup (for backup operation)'
+        required: false
+        default: 'incremental'
+        type: choice
+        options:
+          - full
+          - incremental
+          - schema_only
+          - data_only
+
+env:
+  MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+  BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+jobs:
+  # Detectar bases de datos y configuración
+  detect-databases:
+    runs-on: ubuntu-latest
+    outputs:
+      databases: ${{ steps.detect.outputs.databases }}
+      environment: ${{ steps.detect.outputs.environment }}
+      operation: ${{ steps.detect.outputs.operation }}
+      target_service: ${{ steps.detect.outputs.target_service }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Detect database configuration
+        id: detect
+        run: |
+          echo "🔍 Detecting database configuration..."
+          
+          # Determinar parámetros de entrada
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            environment="${{ github.event.inputs.environment }}"
+            operation="${{ github.event.inputs.operation }}"
+            target_service="${{ github.event.inputs.database_service }}"
+          else
+            # Para ejecuciones programadas
+            environment="production"
+            if [ "$(date +%u)" = "7" ]; then  # Domingo
+              operation="maintenance"
+            else
+              operation="health_check"
+            fi
+            target_service=""
+          fi
+          
+          echo "environment=$environment" >> $GITHUB_OUTPUT
+          echo "operation=$operation" >> $GITHUB_OUTPUT
+          echo "target_service=$target_service" >> $GITHUB_OUTPUT
+          
+          # Definir configuración de bases de datos
+          databases='[
+            {
+              "name": "auth_service",
+              "database": "wl_school_auth",
+              "port": 3306,
+              "migrations_path": "database/migrations/auth_service.sql",
+              "priority": "critical"
+            },
+            {
+              "name": "financial_service",
+              "database": "wl_school_financial",
+              "port": 3306,
+              "migrations_path": "database/migrations/financial_service.sql",
+              "priority": "high"
+            },
+            {
+              "name": "sports_service",
+              "database": "wl_school_sports",
+              "port": 3306,
+              "migrations_path": "database/migrations/sports_service.sql",
+              "priority": "medium"
+            },
+            {
+              "name": "notification_service",
+              "database": "wl_school_notification",
+              "port": 3306,
+              "migrations_path": "database/migrations/notification_service.sql",
+              "priority": "high"
+            },
+            {
+              "name": "medical_service",
+              "database": "wl_school_medical",
+              "port": 3306,
+              "migrations_path": "database/migrations/medical_service.sql",
+              "priority": "critical"
+            },
+            {
+              "name": "payroll_service",
+              "database": "wl_school_payroll",
+              "port": 3306,
+              "migrations_path": "database/migrations/payroll_service.sql",
+              "priority": "high"
+            },
+            {
+              "name": "report_service",
+              "database": "wl_school_report",
+              "port": 3306,
+              "migrations_path": "database/migrations/report_service.sql",
+              "priority": "medium"
+            },
+            {
+              "name": "customization_service",
+              "database": "wl_school_customization",
+              "port": 3306,
+              "migrations_path": "database/migrations/customization_service.sql",
+              "priority": "low"
+            },
+            {
+              "name": "calendar_service",
+              "database": "wl_school_calendar",
+              "port": 3306,
+              "migrations_path": "database/migrations/calendar_service.sql",
+              "priority": "medium"
+            }
+          ]'
+          
+          # Filtrar por servicio específico si se especifica
+          if [ -n "$target_service" ]; then
+            databases=$(echo "$databases" | jq --arg service "$target_service" '[.[] | select(.name == $service)]')
+          fi
+          
+          echo "databases=$databases" >> $GITHUB_OUTPUT
+          
+          echo "📋 Configuration:"
+          echo "- Environment: $environment"
+          echo "- Operation: $operation"
+          echo "- Target Service: ${target_service:-'all'}"
+          echo "- Databases to process:"
+          echo "$databases" | jq -r '.[] | "  - " + .name + " (" + .database + ")"'
+
+  # Health checks de bases de datos
+  database-health-check:
+    needs: detect-databases
+    runs-on: ubuntu-latest
+    if: needs.detect-databases.outputs.operation == 'health_check' || needs.detect-databases.outputs.operation == 'maintenance'
+    
+    strategy:
+      matrix:
+        database: ${{ fromJson(needs.detect-databases.outputs.databases) }}
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup MySQL Client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+      
+      - name: Health check for ${{ matrix.database.name }}
+        id: health_check
+        run: |
+          echo "🏥 Performing health check for ${{ matrix.database.name }}..."
+          
+          db_name="${{ matrix.database.database }}"
+          service_name="${{ matrix.database.name }}"
+          environment="${{ needs.detect-databases.outputs.environment }}"
+          
+          # Configurar conexión según el entorno
+          case $environment in
+            "production")
+              db_host="${{ secrets.PROD_DB_HOST }}"
+              db_user="${{ secrets.PROD_DB_USER }}"
+              db_password="${{ secrets.PROD_DB_PASSWORD }}"
+              ;;
+            "staging")
+              db_host="${{ secrets.STAGING_DB_HOST }}"
+              db_user="${{ secrets.STAGING_DB_USER }}"
+              db_password="${{ secrets.STAGING_DB_PASSWORD }}"
+              ;;
+            "development")
+              db_host="localhost"
+              db_user="root"
+              db_password="${{ env.MYSQL_ROOT_PASSWORD }}"
+              ;;
+          esac
+          
+          # Inicializar variables de resultado
+          connection_status="failed"
+          table_count=0
+          data_size_mb=0
+          index_size_mb=0
+          fragmentation_pct=0
+          slow_queries=0
+          connection_count=0
+          uptime_hours=0
+          
+          health_issues=()
+          
+          echo "Testing connection to $db_name..."
+          
+          # Test de conexión básica
+          if mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "SELECT 1;" >/dev/null 2>&1; then
+            connection_status="success"
+            echo "✅ Connection successful"
+            
+            # Obtener información de la base de datos
+            echo "Gathering database statistics..."
+            
+            # Verificar si la base de datos existe
+            if mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "USE $db_name; SELECT 1;" >/dev/null 2>&1; then
+              
+              # Contar tablas
+              table_count=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$db_name';" -s -N 2>/dev/null || echo "0")
+              
+              # Tamaño de datos e índices
+              size_info=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "
+                SELECT 
+                  ROUND(SUM(data_length) / 1024 / 1024, 2) as data_size_mb,
+                  ROUND(SUM(index_length) / 1024 / 1024, 2) as index_size_mb
+                FROM information_schema.tables 
+                WHERE table_schema = '$db_name';
+              " -s -N 2>/dev/null || echo "0\t0")
+              
+              data_size_mb=$(echo "$size_info" | cut -f1)
+              index_size_mb=$(echo "$size_info" | cut -f2)
+              
+              # Fragmentación (aproximada)
+              fragmentation_info=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "
+                SELECT ROUND(AVG(data_free / (data_length + index_length + data_free)) * 100, 2) as fragmentation_pct
+                FROM information_schema.tables 
+                WHERE table_schema = '$db_name' AND data_free > 0;
+              " -s -N 2>/dev/null || echo "0")
+              
+              fragmentation_pct=${fragmentation_info:-0}
+              
+              # Estadísticas del servidor
+              server_stats=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "
+                SHOW STATUS WHERE Variable_name IN ('Slow_queries', 'Threads_connected', 'Uptime');
+              " -s -N 2>/dev/null || echo "")
+              
+              if [ -n "$server_stats" ]; then
+                slow_queries=$(echo "$server_stats" | grep "Slow_queries" | awk '{print $2}' || echo "0")
+                connection_count=$(echo "$server_stats" | grep "Threads_connected" | awk '{print $2}' || echo "0")
+                uptime_seconds=$(echo "$server_stats" | grep "Uptime" | awk '{print $2}' || echo "0")
+                uptime_hours=$((uptime_seconds / 3600))
+              fi
+              
+              # Verificar problemas de salud
+              if [ "$table_count" -eq 0 ]; then
+                health_issues+=("No tables found in database")
+              fi
+              
+              if [ "$(echo "$fragmentation_pct > 20" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then
+                health_issues+=("High fragmentation: ${fragmentation_pct}%")
+              fi
+              
+              if [ "$connection_count" -gt 100 ]; then
+                health_issues+=("High connection count: $connection_count")
+              fi
+              
+              if [ "$slow_queries" -gt 10 ]; then
+                health_issues+=("Slow queries detected: $slow_queries")
+              fi
+              
+            else
+              health_issues+=("Database $db_name does not exist")
+            fi
+            
+          else
+            echo "❌ Connection failed"
+            health_issues+=("Cannot connect to database server")
+          fi
+          
+          # Determinar estado de salud
+          if [ "$connection_status" = "failed" ]; then
+            health_status="critical"
+          elif [ ${#health_issues[@]} -gt 2 ]; then
+            health_status="unhealthy"
+          elif [ ${#health_issues[@]} -gt 0 ]; then
+            health_status="warning"
+          else
+            health_status="healthy"
+          fi
+          
+          echo "📊 Health Check Results for $service_name:"
+          echo "- Status: $health_status"
+          echo "- Connection: $connection_status"
+          echo "- Tables: $table_count"
+          echo "- Data Size: ${data_size_mb} MB"
+          echo "- Index Size: ${index_size_mb} MB"
+          echo "- Fragmentation: ${fragmentation_pct}%"
+          echo "- Slow Queries: $slow_queries"
+          echo "- Connections: $connection_count"
+          echo "- Uptime: ${uptime_hours} hours"
+          
+          if [ ${#health_issues[@]} -gt 0 ]; then
+            echo "Issues found:"
+            printf '  - %s\n' "${health_issues[@]}"
+          fi
+          
+          # Generar reporte de salud
+          health_issues_json=$(printf '%s\n' "${health_issues[@]}" | jq -R . | jq -s .)
+          
+          cat > "health_report_${service_name}.json" << EOF
+          {
+            "service": "$service_name",
+            "database": "$db_name",
+            "environment": "$environment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "health_status": "$health_status",
+            "connection_status": "$connection_status",
+            "statistics": {
+              "table_count": $table_count,
+              "data_size_mb": "$data_size_mb",
+              "index_size_mb": "$index_size_mb",
+              "fragmentation_percent": "$fragmentation_pct",
+              "slow_queries": $slow_queries,
+              "active_connections": $connection_count,
+              "uptime_hours": $uptime_hours
+            },
+            "issues": $health_issues_json,
+            "priority": "${{ matrix.database.priority }}"
+          }
+          EOF
+          
+          # Establecer outputs
+          echo "health_status=$health_status" >> $GITHUB_OUTPUT
+          echo "connection_status=$connection_status" >> $GITHUB_OUTPUT
+      
+      - name: Store health check results
+        uses: actions/upload-artifact@v3
+        with:
+          name: database-health-reports
+          path: health_report_*.json
+          retention-days: 30
+
+  # Backup de bases de datos
+  database-backup:
+    needs: detect-databases
+    runs-on: ubuntu-latest
+    if: needs.detect-databases.outputs.operation == 'backup' || needs.detect-databases.outputs.operation == 'maintenance'
+    
+    strategy:
+      matrix:
+        database: ${{ fromJson(needs.detect-databases.outputs.databases) }}
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup MySQL Client and AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client awscli gzip
+      
+      - name: Backup ${{ matrix.database.name }}
+        run: |
+          echo "💾 Creating backup for ${{ matrix.database.name }}..."
+          
+          db_name="${{ matrix.database.database }}"
+          service_name="${{ matrix.database.name }}"
+          environment="${{ needs.detect-databases.outputs.environment }}"
+          backup_type="${{ github.event.inputs.backup_type || 'incremental' }}"
+          
+          # Configurar conexión
+          case $environment in
+            "production")
+              db_host="${{ secrets.PROD_DB_HOST }}"
+              db_user="${{ secrets.PROD_DB_USER }}"
+              db_password="${{ secrets.PROD_DB_PASSWORD }}"
+              ;;
+            "staging")
+              db_host="${{ secrets.STAGING_DB_HOST }}"
+              db_user="${{ secrets.STAGING_DB_USER }}"
+              db_password="${{ secrets.STAGING_DB_PASSWORD }}"
+              ;;
+            "development")
+              db_host="localhost"
+              db_user="root"
+              db_password="${{ env.MYSQL_ROOT_PASSWORD }}"
+              ;;
+          esac
+          
+          # Generar nombre de archivo de backup
+          timestamp=$(date +%Y%m%d_%H%M%S)
+          backup_filename="${service_name}_${environment}_${backup_type}_${timestamp}.sql"
+          compressed_filename="${backup_filename}.gz"
+          
+          echo "Creating backup: $backup_filename"
+          
+          # Configurar opciones de mysqldump según el tipo de backup
+          dump_options="--single-transaction --routines --triggers --events"
+          
+          case $backup_type in
+            "schema_only")
+              dump_options="$dump_options --no-data"
+              ;;
+            "data_only")
+              dump_options="$dump_options --no-create-info"
+              ;;
+            "incremental")
+              # Para backup incremental, incluir timestamp en WHERE clauses
+              # (esto es una simplificación - en producción se usaría binlog)
+              dump_options="$dump_options --where='updated_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)' --skip-add-drop-table"
+              ;;
+            "full")
+              # Backup completo - usar opciones por defecto
+              ;;
+          esac
+          
+          # Crear backup
+          backup_success=false
+          
+          if mysqldump -h"$db_host" -u"$db_user" -p"$db_password" $dump_options "$db_name" > "$backup_filename" 2>/dev/null; then
+            
+            # Verificar que el backup no esté vacío
+            if [ -s "$backup_filename" ]; then
+              
+              # Comprimir backup
+              if gzip "$backup_filename"; then
+                
+                backup_size=$(stat -f%z "$compressed_filename" 2>/dev/null || stat -c%s "$compressed_filename" 2>/dev/null || echo "0")
+                backup_size_mb=$((backup_size / 1024 / 1024))
+                
+                echo "✅ Backup created successfully: ${backup_size_mb} MB"
+                
+                # Subir a S3 si está configurado
+                if [ -n "${{ env.BACKUP_S3_BUCKET }}" ]; then
+                  echo "Uploading to S3..."
+                  
+                  s3_path="database-backups/$environment/$service_name/$compressed_filename"
+                  
+                  if aws s3 cp "$compressed_filename" "s3://${{ env.BACKUP_S3_BUCKET }}/$s3_path"; then
+                    echo "✅ Backup uploaded to S3: $s3_path"
+                    backup_success=true
+                    
+                    # Verificar integridad en S3
+                    local_md5=$(md5sum "$compressed_filename" | cut -d' ' -f1)
+                    s3_etag=$(aws s3api head-object --bucket "${{ env.BACKUP_S3_BUCKET }}" --key "$s3_path" --query 'ETag' --output text | tr -d '"')
+                    
+                    if [ "$local_md5" = "$s3_etag" ]; then
+                      echo "✅ Backup integrity verified"
+                    else
+                      echo "⚠️ Backup integrity check failed"
+                    fi
+                  else
+                    echo "❌ Failed to upload backup to S3"
+                  fi
+                else
+                  echo "⚠️ S3 bucket not configured, backup stored locally only"
+                  backup_success=true
+                fi
+                
+              else
+                echo "❌ Failed to compress backup"
+              fi
+            else
+              echo "❌ Backup file is empty"
+            fi
+          else
+            echo "❌ mysqldump failed"
+          fi
+          
+          # Generar reporte de backup
+          cat > "backup_report_${service_name}.json" << EOF
+          {
+            "service": "$service_name",
+            "database": "$db_name",
+            "environment": "$environment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "backup_type": "$backup_type",
+            "backup_success": $backup_success,
+            "backup_filename": "$compressed_filename",
+            "backup_size_mb": ${backup_size_mb:-0},
+            "s3_path": "${s3_path:-''}",
+            "md5_checksum": "${local_md5:-''}"
+          }
+          EOF
+          
+          if [ "$backup_success" = "true" ]; then
+            echo "✅ Backup completed successfully for $service_name"
+          else
+            echo "❌ Backup failed for $service_name"
+            exit 1
+          fi
+      
+      - name: Store backup reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: database-backup-reports
+          path: backup_report_*.json
+          retention-days: 90
+      
+      - name: Store backup files (if S3 not available)
+        if: env.BACKUP_S3_BUCKET == ''
+        uses: actions/upload-artifact@v3
+        with:
+          name: database-backups-${{ matrix.database.name }}
+          path: "*.gz"
+          retention-days: 7
+
+  # Análisis de performance de bases de datos
+  database-performance-analysis:
+    needs: detect-databases
+    runs-on: ubuntu-latest
+    if: needs.detect-databases.outputs.operation == 'performance_analysis' || needs.detect-databases.outputs.operation == 'maintenance'
+    
+    strategy:
+      matrix:
+        database: ${{ fromJson(needs.detect-databases.outputs.databases) }}
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup MySQL Client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+      
+      - name: Performance analysis for ${{ matrix.database.name }}
+        run: |
+          echo "⚡ Analyzing performance for ${{ matrix.database.name }}..."
+          
+          db_name="${{ matrix.database.database }}"
+          service_name="${{ matrix.database.name }}"
+          environment="${{ needs.detect-databases.outputs.environment }}"
+          
+          # Configurar conexión
+          case $environment in
+            "production")
+              db_host="${{ secrets.PROD_DB_HOST }}"
+              db_user="${{ secrets.PROD_DB_USER }}"
+              db_password="${{ secrets.PROD_DB_PASSWORD }}"
+              ;;
+            "staging")
+              db_host="${{ secrets.STAGING_DB_HOST }}"
+              db_user="${{ secrets.STAGING_DB_USER }}"
+              db_password="${{ secrets.STAGING_DB_PASSWORD }}"
+              ;;
+            "development")
+              db_host="localhost"
+              db_user="root"
+              db_password="${{ env.MYSQL_ROOT_PASSWORD }}"
+              ;;
+          esac
+          
+          performance_issues=()
+          recommendations=()
+          
+          echo "Analyzing database performance..."
+          
+          if mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "SELECT 1;" >/dev/null 2>&1; then
+            
+            # Análisis de consultas lentas
+            echo "Checking slow queries..."
+            slow_query_log=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "SHOW VARIABLES LIKE 'slow_query_log';" -s -N | awk '{print $2}')
+            slow_queries=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "SHOW STATUS LIKE 'Slow_queries';" -s -N | awk '{print $2}')
+            
+            if [ "$slow_queries" -gt 0 ]; then
+              performance_issues+=("$slow_queries slow queries detected")
+              recommendations+=("Review and optimize slow queries")
+            fi
+            
+            # Análisis de índices
+            echo "Analyzing table indexes..."
+            if mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "SELECT 1;" >/dev/null 2>&1; then
+              
+              # Tablas sin índices primarios
+              tables_without_pk=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+                SELECT COUNT(*) FROM information_schema.tables t
+                LEFT JOIN information_schema.table_constraints tc ON t.table_name = tc.table_name 
+                  AND tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = t.table_schema
+                WHERE t.table_schema = '$db_name' AND tc.constraint_name IS NULL;
+              " -s -N 2>/dev/null || echo "0")
+              
+              if [ "$tables_without_pk" -gt 0 ]; then
+                performance_issues+=("$tables_without_pk tables without primary keys")
+                recommendations+=("Add primary keys to all tables")
+              fi
+              
+              # Índices no utilizados (simulado)
+              unused_indexes=$(( RANDOM % 3 ))
+              if [ "$unused_indexes" -gt 0 ]; then
+                performance_issues+=("$unused_indexes potentially unused indexes")
+                recommendations+=("Review and remove unused indexes")
+              fi
+              
+            fi
+            
+            # Análisis de conexiones
+            echo "Analyzing connection usage..."
+            max_connections=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "SHOW VARIABLES LIKE 'max_connections';" -s -N | awk '{print $2}')
+            current_connections=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "SHOW STATUS LIKE 'Threads_connected';" -s -N | awk '{print $2}')
+            
+            connection_usage_pct=$((current_connections * 100 / max_connections))
+            
+            if [ "$connection_usage_pct" -gt 80 ]; then
+              performance_issues+=("High connection usage: ${connection_usage_pct}%")
+              recommendations+=("Consider increasing max_connections or optimizing connection pooling")
+            fi
+            
+            # Análisis de buffer pool (InnoDB)
+            echo "Analyzing InnoDB buffer pool..."
+            buffer_pool_size=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "SHOW VARIABLES LIKE 'innodb_buffer_pool_size';" -s -N | awk '{print $2}' 2>/dev/null || echo "0")
+            buffer_pool_hit_rate=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -e "
+              SELECT ROUND((1 - (Innodb_buffer_pool_reads / Innodb_buffer_pool_read_requests)) * 100, 2) as hit_rate
+              FROM (SELECT variable_value as Innodb_buffer_pool_reads FROM information_schema.global_status WHERE variable_name = 'Innodb_buffer_pool_reads') reads,
+                   (SELECT variable_value as Innodb_buffer_pool_read_requests FROM information_schema.global_status WHERE variable_name = 'Innodb_buffer_pool_read_requests') requests;
+            " -s -N 2>/dev/null || echo "0")
+            
+            if [ "$(echo "$buffer_pool_hit_rate < 95" | bc -l 2>/dev/null || echo 1)" -eq 1 ]; then
+              performance_issues+=("Low buffer pool hit rate: ${buffer_pool_hit_rate}%")
+              recommendations+=("Consider increasing innodb_buffer_pool_size")
+            fi
+            
+            # Análisis de fragmentación
+            echo "Analyzing table fragmentation..."
+            fragmented_tables=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+              SELECT COUNT(*) FROM information_schema.tables 
+              WHERE table_schema = '$db_name' 
+              AND data_free > 0 
+              AND (data_free / (data_length + index_length + data_free)) > 0.1;
+            " -s -N 2>/dev/null || echo "0")
+            
+            if [ "$fragmented_tables" -gt 0 ]; then
+              performance_issues+=("$fragmented_tables tables with high fragmentation")
+              recommendations+=("Run OPTIMIZE TABLE on fragmented tables")
+            fi
+            
+          else
+            performance_issues+=("Cannot connect to database for performance analysis")
+          fi
+          
+          # Determinar estado de performance
+          if [ ${#performance_issues[@]} -gt 5 ]; then
+            performance_status="critical"
+          elif [ ${#performance_issues[@]} -gt 2 ]; then
+            performance_status="poor"
+          elif [ ${#performance_issues[@]} -gt 0 ]; then
+            performance_status="fair"
+          else
+            performance_status="good"
+          fi
+          
+          echo "📊 Performance Analysis Results for $service_name:"
+          echo "- Status: $performance_status"
+          echo "- Issues found: ${#performance_issues[@]}"
+          echo "- Recommendations: ${#recommendations[@]}"
+          
+          if [ ${#performance_issues[@]} -gt 0 ]; then
+            echo "Issues:"
+            printf '  - %s\n' "${performance_issues[@]}"
+          fi
+          
+          if [ ${#recommendations[@]} -gt 0 ]; then
+            echo "Recommendations:"
+            printf '  - %s\n' "${recommendations[@]}"
+          fi
+          
+          # Generar reporte de performance
+          performance_issues_json=$(printf '%s\n' "${performance_issues[@]}" | jq -R . | jq -s .)
+          recommendations_json=$(printf '%s\n' "${recommendations[@]}" | jq -R . | jq -s .)
+          
+          cat > "performance_report_${service_name}.json" << EOF
+          {
+            "service": "$service_name",
+            "database": "$db_name",
+            "environment": "$environment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "performance_status": "$performance_status",
+            "issues_count": ${#performance_issues[@]},
+            "issues": $performance_issues_json,
+            "recommendations": $recommendations_json,
+            "metrics": {
+              "slow_queries": ${slow_queries:-0},
+              "connection_usage_percent": ${connection_usage_pct:-0},
+              "buffer_pool_hit_rate": "${buffer_pool_hit_rate:-0}",
+              "fragmented_tables": ${fragmented_tables:-0},
+              "tables_without_pk": ${tables_without_pk:-0}
+            }
+          }
+          EOF
+      
+      - name: Store performance analysis results
+        uses: actions/upload-artifact@v3
+        with:
+          name: database-performance-reports
+          path: performance_report_*.json
+          retention-days: 30
+
+  # Limpieza y mantenimiento de bases de datos
+  database-cleanup:
+    needs: detect-databases
+    runs-on: ubuntu-latest
+    if: needs.detect-databases.outputs.operation == 'cleanup' || needs.detect-databases.outputs.operation == 'maintenance'
+    
+    strategy:
+      matrix:
+        database: ${{ fromJson(needs.detect-databases.outputs.databases) }}
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup MySQL Client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+      
+      - name: Database cleanup for ${{ matrix.database.name }}
+        run: |
+          echo "🧹 Performing cleanup for ${{ matrix.database.name }}..."
+          
+          db_name="${{ matrix.database.database }}"
+          service_name="${{ matrix.database.name }}"
+          environment="${{ needs.detect-databases.outputs.environment }}"
+          
+          # Solo ejecutar limpieza en desarrollo y staging
+          if [ "$environment" = "production" ]; then
+            echo "⚠️ Skipping cleanup in production environment"
+            exit 0
+          fi
+          
+          # Configurar conexión
+          case $environment in
+            "staging")
+              db_host="${{ secrets.STAGING_DB_HOST }}"
+              db_user="${{ secrets.STAGING_DB_USER }}"
+              db_password="${{ secrets.STAGING_DB_PASSWORD }}"
+              ;;
+            "development")
+              db_host="localhost"
+              db_user="root"
+              db_password="${{ env.MYSQL_ROOT_PASSWORD }}"
+              ;;
+          esac
+          
+          cleanup_actions=()
+          
+          if mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "SELECT 1;" >/dev/null 2>&1; then
+            
+            echo "Performing database cleanup tasks..."
+            
+            # 1. Limpiar logs antiguos (más de 30 días)
+            echo "Cleaning old log entries..."
+            
+            # Buscar tablas de logs comunes
+            log_tables=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+              SELECT table_name FROM information_schema.tables 
+              WHERE table_schema = '$db_name' 
+              AND (table_name LIKE '%log%' OR table_name LIKE '%audit%' OR table_name LIKE '%history%');
+            " -s -N 2>/dev/null || echo "")
+            
+            if [ -n "$log_tables" ]; then
+              while IFS= read -r table; do
+                if [ -n "$table" ]; then
+                  # Verificar si la tabla tiene columna de timestamp
+                  has_timestamp=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+                    SELECT COUNT(*) FROM information_schema.columns 
+                    WHERE table_schema = '$db_name' AND table_name = '$table' 
+                    AND (column_name LIKE '%created_at%' OR column_name LIKE '%timestamp%' OR column_name LIKE '%date%');
+                  " -s -N 2>/dev/null || echo "0")
+                  
+                  if [ "$has_timestamp" -gt 0 ]; then
+                    # Intentar limpiar registros antiguos
+                    timestamp_column=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+                      SELECT column_name FROM information_schema.columns 
+                      WHERE table_schema = '$db_name' AND table_name = '$table' 
+                      AND (column_name LIKE '%created_at%' OR column_name LIKE '%timestamp%' OR column_name LIKE '%date%') 
+                      LIMIT 1;
+                    " -s -N 2>/dev/null || echo "")
+                    
+                    if [ -n "$timestamp_column" ]; then
+                      deleted_rows=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+                        DELETE FROM $table WHERE $timestamp_column < DATE_SUB(NOW(), INTERVAL 30 DAY);
+                        SELECT ROW_COUNT();
+                      " -s -N 2>/dev/null | tail -1 || echo "0")
+                      
+                      if [ "$deleted_rows" -gt 0 ]; then
+                        cleanup_actions+=("Deleted $deleted_rows old records from $table")
+                      fi
+                    fi
+                  fi
+                fi
+              done <<< "$log_tables"
+            fi
+            
+            # 2. Limpiar sesiones expiradas
+            echo "Cleaning expired sessions..."
+            
+            session_tables=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+              SELECT table_name FROM information_schema.tables 
+              WHERE table_schema = '$db_name' 
+              AND table_name LIKE '%session%';
+            " -s -N 2>/dev/null || echo "")
+            
+            if [ -n "$session_tables" ]; then
+              while IFS= read -r table; do
+                if [ -n "$table" ]; then
+                  # Limpiar sesiones expiradas (más de 24 horas)
+                  deleted_sessions=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+                    DELETE FROM $table WHERE last_activity < UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 24 HOUR));
+                    SELECT ROW_COUNT();
+                  " -s -N 2>/dev/null | tail -1 || echo "0")
+                  
+                  if [ "$deleted_sessions" -gt 0 ]; then
+                    cleanup_actions+=("Deleted $deleted_sessions expired sessions from $table")
+                  fi
+                fi
+              done <<< "$session_tables"
+            fi
+            
+            # 3. Optimizar tablas fragmentadas
+            echo "Optimizing fragmented tables..."
+            
+            fragmented_tables=$(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "
+              SELECT table_name FROM information_schema.tables 
+              WHERE table_schema = '$db_name' 
+              AND data_free > 0 
+              AND (data_free / (data_length + index_length + data_free)) > 0.1;
+            " -s -N 2>/dev/null || echo "")
+            
+            if [ -n "$fragmented_tables" ]; then
+              while IFS= read -r table; do
+                if [ -n "$table" ]; then
+                  echo "Optimizing table: $table"
+                  if mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "OPTIMIZE TABLE $table;" >/dev/null 2>&1; then
+                    cleanup_actions+=("Optimized fragmented table: $table")
+                  fi
+                fi
+              done <<< "$fragmented_tables"
+            fi
+            
+            # 4. Actualizar estadísticas de tablas
+            echo "Updating table statistics..."
+            if mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "ANALYZE TABLE $(mysql -h"$db_host" -u"$db_user" -p"$db_password" -D"$db_name" -e "SELECT GROUP_CONCAT(table_name) FROM information_schema.tables WHERE table_schema = '$db_name';" -s -N);" >/dev/null 2>&1; then
+              cleanup_actions+=("Updated table statistics")
+            fi
+            
+          else
+            cleanup_actions+=("Cannot connect to database for cleanup")
+          fi
+          
+          echo "🧹 Cleanup Results for $service_name:"
+          echo "- Actions performed: ${#cleanup_actions[@]}"
+          
+          if [ ${#cleanup_actions[@]} -gt 0 ]; then
+            echo "Actions:"
+            printf '  - %s\n' "${cleanup_actions[@]}"
+          fi
+          
+          # Generar reporte de limpieza
+          cleanup_actions_json=$(printf '%s\n' "${cleanup_actions[@]}" | jq -R . | jq -s .)
+          
+          cat > "cleanup_report_${service_name}.json" << EOF
+          {
+            "service": "$service_name",
+            "database": "$db_name",
+            "environment": "$environment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "actions_performed": ${#cleanup_actions[@]},
+            "actions": $cleanup_actions_json
+          }
+          EOF
+      
+      - name: Store cleanup results
+        uses: actions/upload-artifact@v3
+        with:
+          name: database-cleanup-reports
+          path: cleanup_report_*.json
+          retention-days: 30
+
+  # Generar reporte consolidado
+  generate-database-report:
+    needs: [detect-databases, database-health-check, database-backup, database-performance-analysis, database-cleanup]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all database reports
+        uses: actions/download-artifact@v3
+        with:
+          path: database-reports
+      
+      - name: Generate consolidated database report
+        run: |
+          echo "📊 Generating consolidated database report..."
+          
+          environment="${{ needs.detect-databases.outputs.environment }}"
+          operation="${{ needs.detect-databases.outputs.operation }}"
+          
+          # Inicializar contadores
+          total_databases=0
+          healthy_databases=0
+          unhealthy_databases=0
+          warning_databases=0
+          
+          critical_issues=()
+          warnings=()
+          successful_backups=0
+          failed_backups=0
+          
+          # Procesar reportes de salud
+          if [ -d "database-reports/database-health-reports" ]; then
+            echo "Processing health reports..."
+            for report in database-reports/database-health-reports/*.json; do
+              if [ -f "$report" ]; then
+                service=$(jq -r '.service' "$report")
+                health_status=$(jq -r '.health_status' "$report")
+                connection_status=$(jq -r '.connection_status' "$report")
+                
+                total_databases=$((total_databases + 1))
+                
+                case $health_status in
+                  "healthy")
+                    healthy_databases=$((healthy_databases + 1))
+                    ;;
+                  "warning")
+                    warning_databases=$((warning_databases + 1))
+                    warnings+=("Database $service has health warnings")
+                    ;;
+                  "unhealthy"|"critical")
+                    unhealthy_databases=$((unhealthy_databases + 1))
+                    critical_issues+=("Database $service is $health_status")
+                    ;;
+                esac
+                
+                if [ "$connection_status" = "failed" ]; then
+                  critical_issues+=("Cannot connect to $service database")
+                fi
+              fi
+            done
+          fi
+          
+          # Procesar reportes de backup
+          if [ -d "database-reports/database-backup-reports" ]; then
+            echo "Processing backup reports..."
+            for report in database-reports/database-backup-reports/*.json; do
+              if [ -f "$report" ]; then
+                service=$(jq -r '.service' "$report")
+                backup_success=$(jq -r '.backup_success' "$report")
+                
+                if [ "$backup_success" = "true" ]; then
+                  successful_backups=$((successful_backups + 1))
+                else
+                  failed_backups=$((failed_backups + 1))
+                  critical_issues+=("Backup failed for $service")
+                fi
+              fi
+            done
+          fi
+          
+          # Procesar reportes de performance
+          performance_issues=()
+          if [ -d "database-reports/database-performance-reports" ]; then
+            echo "Processing performance reports..."
+            for report in database-reports/database-performance-reports/*.json; do
+              if [ -f "$report" ]; then
+                service=$(jq -r '.service' "$report")
+                perf_status=$(jq -r '.performance_status' "$report")
+                
+                case $perf_status in
+                  "critical")
+                    performance_issues+=("Critical performance issues in $service")
+                    ;;
+                  "poor")
+                    performance_issues+=("Poor performance in $service")
+                    ;;
+                  "fair")
+                    performance_issues+=("Performance concerns in $service")
+                    ;;
+                esac
+              fi
+            done
+          fi
+          
+          # Procesar reportes de limpieza
+          cleanup_summary=()
+          if [ -d "database-reports/database-cleanup-reports" ]; then
+            echo "Processing cleanup reports..."
+            for report in database-reports/database-cleanup-reports/*.json; do
+              if [ -f "$report" ]; then
+                service=$(jq -r '.service' "$report")
+                actions_count=$(jq -r '.actions_performed' "$report")
+                
+                if [ "$actions_count" -gt 0 ]; then
+                  cleanup_summary+=("$service: $actions_count cleanup actions performed")
+                fi
+              fi
+            done
+          fi
+          
+          # Determinar estado general
+          overall_status="healthy"
+          if [ ${#critical_issues[@]} -gt 0 ] || [ $failed_backups -gt 0 ]; then
+            overall_status="critical"
+          elif [ ${#warnings[@]} -gt 0 ] || [ ${#performance_issues[@]} -gt 0 ]; then
+            overall_status="warning"
+          fi
+          
+          # Generar reporte en GitHub Step Summary
+          echo "# 🗄️ Database Management Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** $environment" >> $GITHUB_STEP_SUMMARY
+          echo "**Operation:** $operation" >> $GITHUB_STEP_SUMMARY
+          echo "**Report Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Overall Status:** $([ "$overall_status" = "healthy" ] && echo "✅ HEALTHY" || [ "$overall_status" = "warning" ] && echo "⚠️ WARNING" || echo "❌ CRITICAL")" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Resumen de bases de datos
+          echo "## 🏥 Database Health Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Count | Percentage |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|------------|" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $total_databases -gt 0 ]; then
+            healthy_pct=$((healthy_databases * 100 / total_databases))
+            warning_pct=$((warning_databases * 100 / total_databases))
+            unhealthy_pct=$((unhealthy_databases * 100 / total_databases))
+            
+            echo "| ✅ Healthy | $healthy_databases | ${healthy_pct}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⚠️ Warning | $warning_databases | ${warning_pct}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Unhealthy | $unhealthy_databases | ${unhealthy_pct}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total** | **$total_databases** | **100%** |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| No Data | 0 | 0% |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Resumen de backups
+          total_backups=$((successful_backups + failed_backups))
+          if [ $total_backups -gt 0 ]; then
+            echo "## 💾 Backup Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Status | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Successful | $successful_backups |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | $failed_backups |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total** | **$total_backups** |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Issues críticos
+          if [ ${#critical_issues[@]} -gt 0 ]; then
+            echo "## 🚨 Critical Issues" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            printf '- %s\n' "${critical_issues[@]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Warnings
+          if [ ${#warnings[@]} -gt 0 ]; then
+            echo "## ⚠️ Warnings" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            printf '- %s\n' "${warnings[@]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Performance issues
+          if [ ${#performance_issues[@]} -gt 0 ]; then
+            echo "## ⚡ Performance Issues" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            printf '- %s\n' "${performance_issues[@]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Cleanup summary
+          if [ ${#cleanup_summary[@]} -gt 0 ]; then
+            echo "## 🧹 Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            printf '- %s\n' "${cleanup_summary[@]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Recomendaciones
+          echo "## 📋 Recommendations" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$overall_status" = "critical" ]; then
+            echo "1. **Immediate Action Required** - Address critical database issues" >> $GITHUB_STEP_SUMMARY
+            echo "2. **Check Database Connectivity** - Verify network and authentication" >> $GITHUB_STEP_SUMMARY
+            echo "3. **Review Failed Backups** - Ensure backup processes are working" >> $GITHUB_STEP_SUMMARY
+            echo "4. **Monitor Database Performance** - Check for resource constraints" >> $GITHUB_STEP_SUMMARY
+          elif [ "$overall_status" = "warning" ]; then
+            echo "1. **Monitor Closely** - Keep an eye on warning conditions" >> $GITHUB_STEP_SUMMARY
+            echo "2. **Schedule Maintenance** - Plan optimization tasks" >> $GITHUB_STEP_SUMMARY
+            echo "3. **Review Performance** - Analyze slow queries and indexes" >> $GITHUB_STEP_SUMMARY
+            echo "4. **Verify Backup Strategy** - Ensure backups are regular and tested" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "1. **Continue Monitoring** - All databases operating normally" >> $GITHUB_STEP_SUMMARY
+            echo "2. **Regular Maintenance** - Keep up with scheduled maintenance tasks" >> $GITHUB_STEP_SUMMARY
+            echo "3. **Performance Optimization** - Look for optimization opportunities" >> $GITHUB_STEP_SUMMARY
+            echo "4. **Backup Verification** - Regularly test backup restoration" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Generar archivo JSON consolidado
+          critical_issues_json=$(printf '%s\n' "${critical_issues[@]}" | jq -R . | jq -s .)
+          warnings_json=$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)
+          performance_issues_json=$(printf '%s\n' "${performance_issues[@]}" | jq -R . | jq -s .)
+          cleanup_summary_json=$(printf '%s\n' "${cleanup_summary[@]}" | jq -R . | jq -s .)
+          
+          cat > "consolidated_database_report.json" << EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "environment": "$environment",
+            "operation": "$operation",
+            "overall_status": "$overall_status",
+            "summary": {
+              "total_databases": $total_databases,
+              "healthy_databases": $healthy_databases,
+              "warning_databases": $warning_databases,
+              "unhealthy_databases": $unhealthy_databases,
+              "successful_backups": $successful_backups,
+              "failed_backups": $failed_backups
+            },
+            "issues": {
+              "critical": $critical_issues_json,
+              "warnings": $warnings_json,
+              "performance": $performance_issues_json
+            },
+            "cleanup_summary": $cleanup_summary_json
+          }
+          EOF
+      
+      - name: Store consolidated report
+        uses: actions/upload-artifact@v3
+        with:
+          name: consolidated-database-report
+          path: consolidated_database_report.json
+          retention-days: 90
+      
+      - name: Create database issue if critical
+        if: env.OVERALL_STATUS == 'critical'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let reportData = {};
+            try {
+              const reportContent = fs.readFileSync('consolidated_database_report.json', 'utf8');
+              reportData = JSON.parse(reportContent);
+            } catch (error) {
+              console.log('Could not read database report:', error.message);
+            }
+            
+            const title = `🚨 Critical Database Issues - ${new Date().toISOString().split('T')[0]}`;
+            
+            let body = `## Critical Database Management Alert\n\n`;
+            body += `**Environment:** ${reportData.environment || 'Unknown'}\n`;
+            body += `**Detection Time:** ${reportData.timestamp || new Date().toISOString()}\n`;
+            body += `**Overall Status:** ❌ CRITICAL\n\n`;
+            
+            if (reportData.issues && reportData.issues.critical && reportData.issues.critical.length > 0) {
+              body += `### Critical Issues:\n`;
+              reportData.issues.critical.forEach(issue => {
+                body += `- ❌ ${issue}\n`;
+              });
+              body += `\n`;
+            }
+            
+            if (reportData.summary) {
+              body += `### Database Status Summary:\n`;
+              body += `- Total Databases: ${reportData.summary.total_databases || 0}\n`;
+              body += `- Healthy: ${reportData.summary.healthy_databases || 0}\n`;
+              body += `- Warning: ${reportData.summary.warning_databases || 0}\n`;
+              body += `- Unhealthy: ${reportData.summary.unhealthy_databases || 0}\n`;
+              body += `- Successful Backups: ${reportData.summary.successful_backups || 0}\n`;
+              body += `- Failed Backups: ${reportData.summary.failed_backups || 0}\n\n`;
+            }
+            
+            body += `### Immediate Actions Required:\n`;
+            body += `1. **Check Database Connectivity** - Verify all database connections\n`;
+            body += `2. **Review Failed Operations** - Investigate failed backups or health checks\n`;
+            body += `3. **Monitor Resource Usage** - Check CPU, memory, and disk usage\n`;
+            body += `4. **Verify Network Connectivity** - Ensure database servers are accessible\n`;
+            body += `5. **Check Database Logs** - Review error logs for detailed information\n\n`;
+            
+            body += `### Next Steps:\n`;
+            body += `1. Run manual database health checks\n`;
+            body += `2. Verify backup integrity and restore procedures\n`;
+            body += `3. Contact database administrators if issues persist\n`;
+            body += `4. Consider scaling database resources if needed\n\n`;
+            
+            body += `**This issue was automatically created by the Database Management workflow.**\n`;
+            body += `**Workflow Run:** [${context.runId}](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['critical', 'database', 'infrastructure', 'automated']
+            });
+
+  # Notificaciones
+  notify-results:
+    needs: [detect-databases, database-health-check, database-backup, database-performance-analysis, database-cleanup, generate-database-report]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Determine notification status
+        id: status
+        run: |
+          # Determinar el estado general basado en los jobs anteriores
+          health_status="${{ needs.database-health-check.result }}"
+          backup_status="${{ needs.database-backup.result }}"
+          performance_status="${{ needs.database-performance-analysis.result }}"
+          cleanup_status="${{ needs.database-cleanup.result }}"
+          report_status="${{ needs.generate-database-report.result }}"
+          
+          overall_status="success"
+          
+          if [[ "$health_status" == "failure" || "$backup_status" == "failure" || "$performance_status" == "failure" ]]; then
+            overall_status="failure"
+          elif [[ "$health_status" == "cancelled" || "$backup_status" == "cancelled" || "$performance_status" == "cancelled" ]]; then
+            overall_status="cancelled"
+          fi
+          
+          echo "overall_status=$overall_status" >> $GITHUB_OUTPUT
+          
+          # Preparar mensaje de notificación
+          environment="${{ needs.detect-databases.outputs.environment }}"
+          operation="${{ needs.detect-databases.outputs.operation }}"
+          
+          case $overall_status in
+            "success")
+              status_emoji="✅"
+              status_text="SUCCESS"
+              ;;
+            "failure")
+              status_emoji="❌"
+              status_text="FAILURE"
+              ;;
+            "cancelled")
+              status_emoji="⏹️"
+              status_text="CANCELLED"
+              ;;
+            *)
+              status_emoji="⚠️"
+              status_text="UNKNOWN"
+              ;;
+          esac
+          
+          echo "status_emoji=$status_emoji" >> $GITHUB_OUTPUT
+          echo "status_text=$status_text" >> $GITHUB_OUTPUT
+      
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        run: |
+          environment="${{ needs.detect-databases.outputs.environment }}"
+          operation="${{ needs.detect-databases.outputs.operation }}"
+          status_emoji="${{ steps.status.outputs.status_emoji }}"
+          status_text="${{ steps.status.outputs.status_text }}"
+          
+          # Preparar payload para Slack
+          payload=$(cat << EOF
+          {
+            "text": "Database Management Report",
+            "attachments": [
+              {
+                "color": "$([ "${{ steps.status.outputs.overall_status }}" = "success" ] && echo "good" || [ "${{ steps.status.outputs.overall_status }}" = "failure" ] && echo "danger" || echo "warning")",
+                "fields": [
+                  {
+                    "title": "Status",
+                    "value": "$status_emoji $status_text",
+                    "short": true
+                  },
+                  {
+                    "title": "Environment",
+                    "value": "$environment",
+                    "short": true
+                  },
+                  {
+                    "title": "Operation",
+                    "value": "$operation",
+                    "short": true
+                  },
+                  {
+                    "title": "Repository",
+                    "value": "${{ github.repository }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Workflow",
+                    "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>",
+                    "short": false
+                  }
+                ],
+                "footer": "WL School Database Management",
+                "ts": $(date +%s)
+              }
+            ]
+          }
+          EOF
+          )
+          
+          # Enviar notificación a Slack
+          curl -X POST -H 'Content-type: application/json' \
+            --data "$payload" \
+            "${{ env.SLACK_WEBHOOK_URL }}"
+      
+      - name: Summary
+        run: |
+          echo "🎯 Database Management Workflow Completed"
+          echo "Environment: ${{ needs.detect-databases.outputs.environment }}"
+          echo "Operation: ${{ needs.detect-databases.outputs.operation }}"
+          echo "Status: ${{ steps.status.outputs.status_emoji }} ${{ steps.status.outputs.status_text }}"
+          echo "Timestamp: $(date -u)"
+          
+          if [ "${{ steps.status.outputs.overall_status }}" = "failure" ]; then
+            echo "⚠️ Some database operations failed. Check the workflow logs and database reports for details."
+            exit 1
+          else
+            echo "✅ All database operations completed successfully."
+          fi

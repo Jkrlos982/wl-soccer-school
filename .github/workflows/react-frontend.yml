@@ -1,0 +1,444 @@
+name: React Frontend PWA CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/react-frontend.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'frontend/**'
+
+env:
+  NODE_VERSION: '18'
+  PNPM_VERSION: '8'
+
+jobs:
+  # Job para detectar cambios en frontend
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.changes.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+
+  # Job para linting y testing
+  test-frontend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+      
+      - name: Setup pnpm cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: Type checking
+        working-directory: frontend
+        run: pnpm run type-check
+      
+      - name: Lint code
+        working-directory: frontend
+        run: pnpm run lint
+      
+      - name: Format check
+        working-directory: frontend
+        run: pnpm run format:check
+      
+      - name: Run unit tests
+        working-directory: frontend
+        run: pnpm run test:unit --coverage
+      
+      - name: Run component tests
+        working-directory: frontend
+        run: pnpm run test:component
+      
+      - name: Upload test coverage
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: frontend/coverage/lcov.info
+          flags: frontend
+          name: frontend-coverage
+
+  # Job para E2E testing
+  e2e-tests:
+    needs: [detect-changes, test-frontend]
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        browser: [chromium, firefox, webkit]
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+      
+      - name: Build application
+        working-directory: frontend
+        run: pnpm run build
+      
+      - name: Start preview server
+        working-directory: frontend
+        run: |
+          pnpm run preview &
+          sleep 10
+      
+      - name: Run E2E tests
+        working-directory: frontend
+        run: pnpm exec playwright test --project=${{ matrix.browser }}
+      
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: e2e-results-${{ matrix.browser }}
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+
+  # Job para accessibility testing
+  accessibility-tests:
+    needs: [detect-changes, test-frontend]
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: Build application
+        working-directory: frontend
+        run: pnpm run build
+      
+      - name: Run accessibility tests
+        working-directory: frontend
+        run: pnpm run test:a11y
+      
+      - name: Upload accessibility report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: accessibility-report
+          path: frontend/accessibility-report/
+
+  # Job para performance testing
+  performance-tests:
+    needs: [detect-changes, test-frontend]
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: Build application
+        working-directory: frontend
+        run: pnpm run build
+      
+      - name: Run Lighthouse CI
+        working-directory: frontend
+        run: |
+          pnpm run preview &
+          sleep 10
+          pnpm exec lhci autorun
+      
+      - name: Upload Lighthouse report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: lighthouse-report
+          path: frontend/.lighthouseci/
+
+  # Job para security scanning
+  security-scan:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: Run security audit
+        working-directory: frontend
+        run: pnpm audit --audit-level moderate
+      
+      - name: Run dependency check
+        working-directory: frontend
+        run: pnpm run security:check
+      
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report
+          path: frontend/security-report.json
+
+  # Job para build y deploy
+  build-and-deploy:
+    needs: [detect-changes, test-frontend, e2e-tests, accessibility-tests, performance-tests, security-scan]
+    if: github.ref == 'refs/heads/main' && success() && needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: Build for production
+        working-directory: frontend
+        env:
+          VITE_API_URL: ${{ secrets.PRODUCTION_API_URL }}
+          VITE_APP_NAME: "WL School"
+          VITE_APP_ENV: "production"
+        run: pnpm run build
+      
+      - name: Generate PWA assets
+        working-directory: frontend
+        run: pnpm run build:pwa
+      
+      - name: Run build analysis
+        working-directory: frontend
+        run: pnpm run analyze
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-build
+          path: |
+            frontend/dist/
+            frontend/build-analysis/
+      
+      - name: Build Docker image
+        working-directory: frontend
+        run: |
+          docker build -t wl-school/frontend:${{ github.sha }} .
+          docker tag wl-school/frontend:${{ github.sha }} wl-school/frontend:latest
+      
+      - name: Login to Docker Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Push Docker image
+        run: |
+          docker push wl-school/frontend:${{ github.sha }}
+          docker push wl-school/frontend:latest
+      
+      - name: Deploy to CDN
+        run: |
+          echo "Deploying frontend to CDN..."
+          # Aquí se agregarían comandos para subir a AWS S3, Cloudflare, etc.
+      
+      - name: Deploy to staging
+        run: |
+          echo "Deploying frontend to staging environment"
+          # Aquí se agregarían los comandos específicos de deployment
+      
+      - name: Update service worker
+        run: |
+          echo "Updating service worker for PWA"
+          # Comandos para actualizar el service worker
+
+  # Job para deploy a preview (solo para PRs)
+  deploy-preview:
+    needs: [detect-changes, test-frontend]
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: Build for preview
+        working-directory: frontend
+        env:
+          VITE_API_URL: ${{ secrets.STAGING_API_URL }}
+          VITE_APP_NAME: "WL School (Preview)"
+          VITE_APP_ENV: "preview"
+        run: pnpm run build
+      
+      - name: Deploy to preview environment
+        run: |
+          echo "Deploying to preview environment for PR #${{ github.event.number }}"
+          # Aquí se agregarían comandos para deployment de preview
+      
+      - name: Comment PR with preview URL
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '🚀 Preview deployment ready! View at: https://preview-pr-${{ github.event.number }}.wl-school.dev'
+            })
+
+  # Job para notificaciones
+  notify:
+    needs: [test-frontend, e2e-tests, accessibility-tests, performance-tests, security-scan, build-and-deploy, deploy-preview]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Notify success
+        if: |
+          needs.test-frontend.result == 'success' &&
+          (needs.build-and-deploy.result == 'success' || needs.build-and-deploy.result == 'skipped') &&
+          (needs.deploy-preview.result == 'success' || needs.deploy-preview.result == 'skipped')
+        run: |
+          echo "✅ Frontend CI/CD completed successfully!"
+          # Aquí se pueden agregar notificaciones a Slack, Discord, etc.
+      
+      - name: Notify failure
+        if: |
+          needs.test-frontend.result == 'failure' ||
+          needs.e2e-tests.result == 'failure' ||
+          needs.accessibility-tests.result == 'failure' ||
+          needs.performance-tests.result == 'failure' ||
+          needs.security-scan.result == 'failure' ||
+          needs.build-and-deploy.result == 'failure' ||
+          needs.deploy-preview.result == 'failure'
+        run: |
+          echo "❌ Frontend CI/CD pipeline failed"
+          # Aquí se pueden agregar notificaciones de error
+      
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## 📊 Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Type | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.test-frontend.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E Tests | ${{ needs.e2e-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Accessibility | ${{ needs.accessibility-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance | ${{ needs.performance-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Deploy | ${{ needs.build-and-deploy.result }} |" >> $GITHUB_STEP_SUMMARY

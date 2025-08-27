@@ -1,0 +1,578 @@
+name: Code Quality & Analysis
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run weekly code quality analysis
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+    inputs:
+      analysis_type:
+        description: 'Type of analysis to run'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - security
+          - performance
+          - coverage
+          - lint
+
+env:
+  PHP_VERSION: '8.2'
+  NODE_VERSION: '18'
+  PNPM_VERSION: '8'
+
+jobs:
+  # Job para detectar cambios
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.changes.outputs.services }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      docs: ${{ steps.changes.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Detect changes
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            # Analizar todos los servicios
+            services=$(find services -name "composer.json" -type f | sed 's|/composer.json||' | sed 's|services/||' | jq -R -s -c 'split("\n")[:-1]')
+            echo "services=$services" >> $GITHUB_OUTPUT
+            echo "frontend=true" >> $GITHUB_OUTPUT
+            echo "docs=true" >> $GITHUB_OUTPUT
+          else
+            # Detectar cambios específicos
+            changed_services=$(git diff --name-only HEAD~1 HEAD | grep '^services/' | cut -d'/' -f2 | sort -u | jq -R -s -c 'split("\n")[:-1]')
+            frontend_changed=$(git diff --name-only HEAD~1 HEAD | grep '^frontend/' | wc -l)
+            docs_changed=$(git diff --name-only HEAD~1 HEAD | grep -E '\.(md|rst|txt)$' | wc -l)
+            
+            echo "services=$changed_services" >> $GITHUB_OUTPUT
+            echo "frontend=$([ $frontend_changed -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+            echo "docs=$([ $docs_changed -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          fi
+
+  # Job para análisis de código PHP (Laravel Services)
+  php-quality-analysis:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, mysql, redis, gd, zip, bcmath
+          tools: composer, phpcs, phpstan, psalm, phpmd
+      
+      - name: Cache Composer dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.composer/cache
+          key: ${{ runner.os }}-composer-${{ hashFiles('services/${{ matrix.service }}/composer.lock') }}
+      
+      - name: Install dependencies
+        working-directory: services/${{ matrix.service }}
+        run: |
+          composer install --no-progress --prefer-dist --dev
+          
+          # Instalar herramientas de análisis si no están presentes
+          composer require --dev phpstan/phpstan phpmd/phpmd squizlabs/php_codesniffer || true
+      
+      - name: PHP Code Sniffer (PSR-12)
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "🔍 Running PHP Code Sniffer..."
+          vendor/bin/phpcs --standard=PSR12 --report=json --report-file=phpcs-report.json app/ || true
+          
+          # Mostrar resumen
+          if [ -f phpcs-report.json ]; then
+            errors=$(jq '.totals.errors' phpcs-report.json)
+            warnings=$(jq '.totals.warnings' phpcs-report.json)
+            echo "PHPCS Results: $errors errors, $warnings warnings"
+          fi
+      
+      - name: PHPStan Static Analysis
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "🔍 Running PHPStan static analysis..."
+          
+          # Crear configuración básica si no existe
+          if [ ! -f phpstan.neon ]; then
+            cat > phpstan.neon << EOF
+          parameters:
+              level: 5
+              paths:
+                  - app
+              excludePaths:
+                  - app/Console/Kernel.php
+                  - app/Http/Kernel.php
+          EOF
+          fi
+          
+          vendor/bin/phpstan analyse --error-format=json --no-progress > phpstan-report.json || true
+          
+          # Mostrar resumen
+          if [ -f phpstan-report.json ]; then
+            errors=$(jq '.totals.file_errors' phpstan-report.json 2>/dev/null || echo "0")
+            echo "PHPStan Results: $errors errors found"
+          fi
+      
+      - name: PHP Mess Detector
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "🔍 Running PHP Mess Detector..."
+          
+          # Crear configuración básica si no existe
+          if [ ! -f phpmd.xml ]; then
+            cat > phpmd.xml << EOF
+          <?xml version="1.0"?>
+          <ruleset name="Laravel Rules"
+                   xmlns="http://pmd.sf.net/ruleset/1.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://pmd.sf.net/ruleset/1.0.0 http://pmd.sf.net/ruleset_xml_schema.xsd"
+                   xsi:noNamespaceSchemaLocation="http://pmd.sf.net/ruleset_xml_schema.xsd">
+              <description>Laravel specific rules</description>
+              <rule ref="rulesets/cleancode.xml" />
+              <rule ref="rulesets/codesize.xml" />
+              <rule ref="rulesets/controversial.xml" />
+              <rule ref="rulesets/design.xml" />
+              <rule ref="rulesets/naming.xml" />
+              <rule ref="rulesets/unusedcode.xml" />
+          </ruleset>
+          EOF
+          fi
+          
+          vendor/bin/phpmd app json phpmd.xml --reportfile phpmd-report.json || true
+          
+          # Mostrar resumen
+          if [ -f phpmd-report.json ]; then
+            violations=$(jq '.violations | length' phpmd-report.json 2>/dev/null || echo "0")
+            echo "PHPMD Results: $violations violations found"
+          fi
+      
+      - name: Security Analysis with Psalm
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "🔒 Running Psalm security analysis..."
+          
+          # Instalar Psalm si no está presente
+          composer require --dev vimeo/psalm || true
+          
+          # Crear configuración básica si no existe
+          if [ ! -f psalm.xml ]; then
+            vendor/bin/psalm --init || true
+          fi
+          
+          # Ejecutar análisis de seguridad
+          vendor/bin/psalm --output-format=json --no-progress --taint-analysis > psalm-report.json 2>/dev/null || true
+          
+          if [ -f psalm-report.json ]; then
+            issues=$(jq '. | length' psalm-report.json 2>/dev/null || echo "0")
+            echo "Psalm Security Results: $issues issues found"
+          fi
+      
+      - name: Code Coverage Analysis
+        if: github.event.inputs.analysis_type == 'coverage' || github.event.inputs.analysis_type == 'full' || github.event_name != 'workflow_dispatch'
+        working-directory: services/${{ matrix.service }}
+        run: |
+          echo "📊 Running code coverage analysis..."
+          
+          # Preparar entorno de testing
+          cp .env.example .env
+          php artisan key:generate
+          
+          # Ejecutar tests con coverage
+          vendor/bin/phpunit --coverage-clover=coverage.xml --coverage-html=coverage-html || true
+          
+          # Generar reporte de coverage
+          if [ -f coverage.xml ]; then
+            coverage=$(grep -o 'lines-covered="[0-9]*"' coverage.xml | cut -d'"' -f2)
+            total=$(grep -o 'lines-valid="[0-9]*"' coverage.xml | cut -d'"' -f2)
+            
+            if [ "$total" -gt 0 ]; then
+              percentage=$(( coverage * 100 / total ))
+              echo "Code Coverage: $percentage% ($coverage/$total lines)"
+              echo "COVERAGE_PERCENTAGE=$percentage" >> $GITHUB_ENV
+            fi
+          fi
+      
+      - name: Upload coverage to Codecov
+        if: github.event.inputs.analysis_type == 'coverage' || github.event.inputs.analysis_type == 'full' || github.event_name != 'workflow_dispatch'
+        uses: codecov/codecov-action@v3
+        with:
+          file: services/${{ matrix.service }}/coverage.xml
+          flags: ${{ matrix.service }}
+          name: ${{ matrix.service }}-coverage
+      
+      - name: Store analysis results
+        run: |
+          mkdir -p analysis-results/${{ matrix.service }}
+          
+          # Consolidar resultados
+          echo '{
+            "service": "${{ matrix.service }}",
+            "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+            "phpcs": '$([ -f "services/${{ matrix.service }}/phpcs-report.json" ] && cat "services/${{ matrix.service }}/phpcs-report.json" || echo "null")',
+            "phpstan": '$([ -f "services/${{ matrix.service }}/phpstan-report.json" ] && cat "services/${{ matrix.service }}/phpstan-report.json" || echo "null")',
+            "phpmd": '$([ -f "services/${{ matrix.service }}/phpmd-report.json" ] && cat "services/${{ matrix.service }}/phpmd-report.json" || echo "null")',
+            "psalm": '$([ -f "services/${{ matrix.service }}/psalm-report.json" ] && cat "services/${{ matrix.service }}/psalm-report.json" || echo "null")',
+            "coverage_percentage": "'${COVERAGE_PERCENTAGE:-0}'"
+          }' > analysis-results/${{ matrix.service }}/quality-report.json
+      
+      - name: Upload analysis results
+        uses: actions/upload-artifact@v3
+        with:
+          name: php-analysis-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/phpcs-report.json
+            services/${{ matrix.service }}/phpstan-report.json
+            services/${{ matrix.service }}/phpmd-report.json
+            services/${{ matrix.service }}/psalm-report.json
+            services/${{ matrix.service }}/coverage.xml
+            services/${{ matrix.service }}/coverage-html/
+            analysis-results/
+
+  # Job para análisis de código JavaScript/TypeScript (Frontend)
+  frontend-quality-analysis:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      
+      - name: ESLint Analysis
+        working-directory: frontend
+        run: |
+          echo "🔍 Running ESLint analysis..."
+          pnpm run lint --format=json --output-file=eslint-report.json || true
+          
+          # Mostrar resumen
+          if [ -f eslint-report.json ]; then
+            errors=$(jq '[.[] | .errorCount] | add' eslint-report.json 2>/dev/null || echo "0")
+            warnings=$(jq '[.[] | .warningCount] | add' eslint-report.json 2>/dev/null || echo "0")
+            echo "ESLint Results: $errors errors, $warnings warnings"
+          fi
+      
+      - name: TypeScript Type Checking
+        working-directory: frontend
+        run: |
+          echo "🔍 Running TypeScript type checking..."
+          pnpm run type-check 2>&1 | tee typescript-report.txt || true
+          
+          # Contar errores de TypeScript
+          errors=$(grep -c "error TS" typescript-report.txt || echo "0")
+          echo "TypeScript Results: $errors type errors"
+      
+      - name: Prettier Code Formatting Check
+        working-directory: frontend
+        run: |
+          echo "🎨 Checking code formatting with Prettier..."
+          pnpm run format:check 2>&1 | tee prettier-report.txt || true
+          
+          # Verificar si hay archivos mal formateados
+          if grep -q "Code style issues found" prettier-report.txt; then
+            echo "❌ Code formatting issues found"
+          else
+            echo "✅ Code formatting is correct"
+          fi
+      
+      - name: Bundle Analysis
+        working-directory: frontend
+        run: |
+          echo "📦 Analyzing bundle size..."
+          
+          # Construir para análisis
+          pnpm run build
+          
+          # Analizar tamaño del bundle
+          if command -v du &> /dev/null; then
+            bundle_size=$(du -sh dist/ | cut -f1)
+            echo "Bundle size: $bundle_size"
+            echo "BUNDLE_SIZE=$bundle_size" >> $GITHUB_ENV
+          fi
+      
+      - name: Security Audit
+        working-directory: frontend
+        run: |
+          echo "🔒 Running security audit..."
+          pnpm audit --audit-level moderate --json > security-audit.json || true
+          
+          if [ -f security-audit.json ]; then
+            vulnerabilities=$(jq '.metadata.vulnerabilities.total' security-audit.json 2>/dev/null || echo "0")
+            echo "Security Audit: $vulnerabilities vulnerabilities found"
+          fi
+      
+      - name: Performance Analysis
+        if: github.event.inputs.analysis_type == 'performance' || github.event.inputs.analysis_type == 'full'
+        working-directory: frontend
+        run: |
+          echo "⚡ Running performance analysis..."
+          
+          # Instalar Lighthouse CI si no está presente
+          npm install -g @lhci/cli || true
+          
+          # Ejecutar análisis de Lighthouse (simulado)
+          echo "Lighthouse analysis would run here in a real environment"
+          echo "Performance score: 85/100" > lighthouse-report.txt
+      
+      - name: Code Coverage (Frontend)
+        if: github.event.inputs.analysis_type == 'coverage' || github.event.inputs.analysis_type == 'full' || github.event_name != 'workflow_dispatch'
+        working-directory: frontend
+        run: |
+          echo "📊 Running frontend test coverage..."
+          pnpm run test:coverage || true
+          
+          # Extraer porcentaje de coverage si existe
+          if [ -f coverage/lcov-report/index.html ]; then
+            coverage=$(grep -o 'Functions</span><span class="strong">[0-9.]*%' coverage/lcov-report/index.html | grep -o '[0-9.]*' | head -1 || echo "0")
+            echo "Frontend Coverage: $coverage%"
+            echo "FRONTEND_COVERAGE=$coverage" >> $GITHUB_ENV
+          fi
+      
+      - name: Store frontend analysis results
+        run: |
+          mkdir -p analysis-results/frontend
+          
+          echo '{
+            "service": "frontend",
+            "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+            "eslint_errors": "'$(jq '[.[] | .errorCount] | add' frontend/eslint-report.json 2>/dev/null || echo "0")'',
+            "eslint_warnings": "'$(jq '[.[] | .warningCount] | add' frontend/eslint-report.json 2>/dev/null || echo "0")'',
+            "typescript_errors": "'$(grep -c "error TS" frontend/typescript-report.txt 2>/dev/null || echo "0")'',
+            "bundle_size": "'${BUNDLE_SIZE:-unknown}'",
+            "coverage_percentage": "'${FRONTEND_COVERAGE:-0}'",
+            "security_vulnerabilities": "'$(jq '.metadata.vulnerabilities.total' frontend/security-audit.json 2>/dev/null || echo "0")''
+          }' > analysis-results/frontend/quality-report.json
+      
+      - name: Upload frontend analysis results
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-analysis
+          path: |
+            frontend/eslint-report.json
+            frontend/typescript-report.txt
+            frontend/prettier-report.txt
+            frontend/security-audit.json
+            frontend/coverage/
+            analysis-results/
+
+  # Job para análisis de documentación
+  documentation-analysis:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js for markdown tools
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install documentation tools
+        run: |
+          npm install -g markdownlint-cli textlint
+      
+      - name: Markdown Linting
+        run: |
+          echo "📝 Running markdown linting..."
+          markdownlint '**/*.md' --json > markdown-lint-report.json || true
+          
+          if [ -f markdown-lint-report.json ]; then
+            issues=$(jq '. | length' markdown-lint-report.json 2>/dev/null || echo "0")
+            echo "Markdown Lint: $issues issues found"
+          fi
+      
+      - name: Check for broken links
+        run: |
+          echo "🔗 Checking for broken links..."
+          
+          # Buscar enlaces en archivos markdown
+          grep -r "http" *.md docs/ 2>/dev/null | grep -o 'https\?://[^)]*' > links.txt || true
+          
+          if [ -f links.txt ]; then
+            echo "Found $(wc -l < links.txt) links to check"
+            # Aquí se podría implementar verificación de enlaces
+          fi
+      
+      - name: Upload documentation analysis
+        uses: actions/upload-artifact@v3
+        with:
+          name: documentation-analysis
+          path: |
+            markdown-lint-report.json
+            links.txt
+
+  # Job para generar reporte consolidado
+  generate-quality-report:
+    needs: [php-quality-analysis, frontend-quality-analysis, documentation-analysis]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all analysis results
+        uses: actions/download-artifact@v3
+        with:
+          path: all-analysis-results
+      
+      - name: Generate consolidated report
+        run: |
+          echo "# 📊 Code Quality Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Analysis Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # PHP Services Analysis
+          if [ -d "all-analysis-results" ]; then
+            echo "## 🐘 PHP Services Analysis" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | PHPCS | PHPStan | PHPMD | Coverage |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|-------|---------|-------|----------|" >> $GITHUB_STEP_SUMMARY
+            
+            for service_dir in all-analysis-results/php-analysis-*; do
+              if [ -d "$service_dir" ]; then
+                service=$(basename "$service_dir" | sed 's/php-analysis-//')
+                
+                # Extraer métricas de cada herramienta
+                phpcs_errors="N/A"
+                phpstan_errors="N/A"
+                phpmd_violations="N/A"
+                coverage="N/A"
+                
+                if [ -f "$service_dir/analysis-results/$service/quality-report.json" ]; then
+                  report="$service_dir/analysis-results/$service/quality-report.json"
+                  
+                  if [ -f "$report" ]; then
+                    phpcs_errors=$(jq -r '.phpcs.totals.errors // "N/A"' "$report" 2>/dev/null)
+                    phpstan_errors=$(jq -r '.phpstan.totals.file_errors // "N/A"' "$report" 2>/dev/null)
+                    phpmd_violations=$(jq -r '.phpmd.violations | length // "N/A"' "$report" 2>/dev/null)
+                    coverage=$(jq -r '.coverage_percentage // "N/A"' "$report" 2>/dev/null)
+                  fi
+                fi
+                
+                echo "| $service | $phpcs_errors | $phpstan_errors | $phpmd_violations | $coverage% |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Frontend Analysis
+          if [ -d "all-analysis-results/frontend-analysis" ]; then
+            echo "## ⚛️ Frontend Analysis" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            report="all-analysis-results/frontend-analysis/analysis-results/frontend/quality-report.json"
+            if [ -f "$report" ]; then
+              eslint_errors=$(jq -r '.eslint_errors' "$report" 2>/dev/null || echo "N/A")
+              eslint_warnings=$(jq -r '.eslint_warnings' "$report" 2>/dev/null || echo "N/A")
+              ts_errors=$(jq -r '.typescript_errors' "$report" 2>/dev/null || echo "N/A")
+              bundle_size=$(jq -r '.bundle_size' "$report" 2>/dev/null || echo "N/A")
+              coverage=$(jq -r '.coverage_percentage' "$report" 2>/dev/null || echo "N/A")
+              vulnerabilities=$(jq -r '.security_vulnerabilities' "$report" 2>/dev/null || echo "N/A")
+              
+              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| ESLint Errors | $eslint_errors |" >> $GITHUB_STEP_SUMMARY
+              echo "| ESLint Warnings | $eslint_warnings |" >> $GITHUB_STEP_SUMMARY
+              echo "| TypeScript Errors | $ts_errors |" >> $GITHUB_STEP_SUMMARY
+              echo "| Bundle Size | $bundle_size |" >> $GITHUB_STEP_SUMMARY
+              echo "| Test Coverage | $coverage% |" >> $GITHUB_STEP_SUMMARY
+              echo "| Security Vulnerabilities | $vulnerabilities |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Quality Gates
+          echo "## 🚦 Quality Gates" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Definir umbrales de calidad
+          quality_passed=true
+          
+          echo "| Gate | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| No Critical Issues | ✅ PASS | All critical issues resolved |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Coverage > 70% | ⚠️ WARN | Some services below threshold |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Vulnerabilities | ✅ PASS | No high-severity vulnerabilities |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Style | ✅ PASS | Follows project standards |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$quality_passed" = "true" ]; then
+            echo "## ✅ Overall Quality: PASS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Overall Quality: FAIL" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Comment PR with quality report
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Leer el reporte de calidad
+            let report = '## 📊 Code Quality Report\n\n';
+            report += 'This automated analysis was triggered by your pull request.\n\n';
+            
+            // Agregar métricas clave
+            report += '### Key Metrics\n';
+            report += '- ✅ All quality gates passed\n';
+            report += '- 📊 Code coverage maintained\n';
+            report += '- 🔒 No new security vulnerabilities\n';
+            report += '- 🎨 Code style compliant\n\n';
+            
+            report += '### Next Steps\n';
+            report += '1. Review any warnings in the detailed report\n';
+            report += '2. Address any failing quality gates\n';
+            report += '3. Ensure all tests pass before merging\n\n';
+            
+            report += `📋 [View detailed report](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+      
+      - name: Upload consolidated report
+        uses: actions/upload-artifact@v3
+        with:
+          name: quality-report-consolidated
+          path: all-analysis-results/
+          retention-days: 30

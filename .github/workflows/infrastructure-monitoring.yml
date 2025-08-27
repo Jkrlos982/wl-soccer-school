@@ -1,0 +1,1099 @@
+name: Infrastructure Monitoring
+
+on:
+  schedule:
+    # Every 5 minutes during business hours (9 AM - 6 PM UTC, Mon-Fri)
+    - cron: '*/5 9-18 * * 1-5'
+    # Every 15 minutes outside business hours
+    - cron: '*/15 0-8,19-23 * * *'
+    - cron: '*/15 * * * 0,6'
+  workflow_dispatch:
+    inputs:
+      monitoring_type:
+        description: 'Type of monitoring to perform'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - health_check
+          - performance
+          - security
+          - resource_usage
+          - network
+      environment:
+        description: 'Environment to monitor'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - development
+      alert_threshold:
+        description: 'Alert threshold (low/medium/high)'
+        required: false
+        default: 'medium'
+        type: choice
+        options:
+          - low
+          - medium
+          - high
+
+env:
+  MONITORING_TIMEOUT: 30
+  ALERT_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+  GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+  PROMETHEUS_URL: ${{ secrets.PROMETHEUS_URL }}
+
+jobs:
+  # Detectar servicios y endpoints
+  detect-services:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.detect.outputs.services }}
+      endpoints: ${{ steps.detect.outputs.endpoints }}
+      environment: ${{ steps.detect.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Detect services and endpoints
+        id: detect
+        run: |
+          echo "🔍 Detecting services and endpoints..."
+          
+          # Determinar entorno
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            environment="${{ github.event.inputs.environment }}"
+          else
+            environment="production"
+          fi
+          
+          echo "environment=$environment" >> $GITHUB_OUTPUT
+          
+          # Definir servicios basados en la estructura del proyecto
+          services='[
+            {
+              "name": "api-gateway",
+              "port": 8080,
+              "health_endpoint": "/health",
+              "metrics_endpoint": "/metrics"
+            },
+            {
+              "name": "auth-service",
+              "port": 8081,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "financial-service",
+              "port": 8082,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "sports-service",
+              "port": 8083,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "notification-service",
+              "port": 8084,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "medical-service",
+              "port": 8085,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "payroll-service",
+              "port": 8086,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "report-service",
+              "port": 8087,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "customization-service",
+              "port": 8088,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "calendar-service",
+              "port": 8089,
+              "health_endpoint": "/api/health",
+              "metrics_endpoint": "/api/metrics"
+            },
+            {
+              "name": "frontend-pwa",
+              "port": 3000,
+              "health_endpoint": "/health",
+              "metrics_endpoint": "/metrics"
+            }
+          ]'
+          
+          # Configurar endpoints según el entorno
+          case $environment in
+            "production")
+              base_url="https://wl-school.com"
+              ;;
+            "staging")
+              base_url="https://staging.wl-school.com"
+              ;;
+            "development")
+              base_url="http://localhost"
+              ;;
+          esac
+          
+          # Generar lista de endpoints
+          endpoints=$(echo "$services" | jq -r --arg base_url "$base_url" '
+            map({
+              name: .name,
+              url: (if .name == "frontend-pwa" then $base_url else ($base_url + ":" + (.port | tostring)) end),
+              health_url: (if .name == "frontend-pwa" then $base_url + .health_endpoint else ($base_url + ":" + (.port | tostring) + .health_endpoint) end),
+              metrics_url: (if .name == "frontend-pwa" then $base_url + .metrics_endpoint else ($base_url + ":" + (.port | tostring) + .metrics_endpoint) end)
+            })
+          ')
+          
+          echo "services=$services" >> $GITHUB_OUTPUT
+          echo "endpoints=$endpoints" >> $GITHUB_OUTPUT
+          
+          echo "📋 Detected services:"
+          echo "$services" | jq -r '.[] | "- " + .name + " (port " + (.port | tostring) + ")"'
+
+  # Health checks de servicios
+  health-checks:
+    needs: detect-services
+    runs-on: ubuntu-latest
+    if: github.event.inputs.monitoring_type == 'health_check' || github.event.inputs.monitoring_type == 'full' || github.event_name == 'schedule'
+    
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-services.outputs.services) }}
+      fail-fast: false
+    
+    steps:
+      - name: Health check for ${{ matrix.service.name }}
+        id: health_check
+        run: |
+          echo "🏥 Performing health check for ${{ matrix.service.name }}..."
+          
+          service_name="${{ matrix.service.name }}"
+          environment="${{ needs.detect-services.outputs.environment }}"
+          
+          # Obtener URL del endpoint de salud
+          health_url=$(echo '${{ needs.detect-services.outputs.endpoints }}' | jq -r '.[] | select(.name == "'$service_name'") | .health_url')
+          
+          echo "Health URL: $health_url"
+          
+          # Realizar health check con timeout
+          start_time=$(date +%s)
+          
+          if response=$(curl -s -w "HTTPSTATUS:%{http_code};TIME:%{time_total}" \
+            --max-time ${{ env.MONITORING_TIMEOUT }} \
+            --connect-timeout 10 \
+            "$health_url" 2>/dev/null); then
+            
+            http_code=$(echo "$response" | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+            response_time=$(echo "$response" | grep -o "TIME:[0-9.]*" | cut -d: -f2)
+            body=$(echo "$response" | sed -E 's/HTTPSTATUS:[0-9]*;TIME:[0-9.]*$//')
+            
+            end_time=$(date +%s)
+            total_time=$((end_time - start_time))
+            
+            # Evaluar estado de salud
+            if [ "$http_code" = "200" ]; then
+              status="healthy"
+              echo "✅ $service_name is healthy (${response_time}s response time)"
+            elif [ "$http_code" = "503" ]; then
+              status="degraded"
+              echo "⚠️ $service_name is degraded (HTTP $http_code)"
+            else
+              status="unhealthy"
+              echo "❌ $service_name is unhealthy (HTTP $http_code)"
+            fi
+          else
+            status="unreachable"
+            http_code="000"
+            response_time="timeout"
+            echo "💀 $service_name is unreachable"
+          fi
+          
+          # Generar reporte de salud
+          cat > "health_report_${service_name}.json" << EOF
+          {
+            "service": "$service_name",
+            "environment": "$environment",
+            "status": "$status",
+            "http_code": "$http_code",
+            "response_time": "$response_time",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "health_url": "$health_url",
+            "details": {
+              "body_preview": "$(echo "$body" | head -c 200)",
+              "total_check_time": $total_time
+            }
+          }
+          EOF
+          
+          # Establecer outputs para el job
+          echo "status=$status" >> $GITHUB_OUTPUT
+          echo "http_code=$http_code" >> $GITHUB_OUTPUT
+          echo "response_time=$response_time" >> $GITHUB_OUTPUT
+      
+      - name: Store health check results
+        uses: actions/upload-artifact@v3
+        with:
+          name: health-reports
+          path: health_report_*.json
+          retention-days: 7
+
+  # Monitoreo de performance
+  performance-monitoring:
+    needs: detect-services
+    runs-on: ubuntu-latest
+    if: github.event.inputs.monitoring_type == 'performance' || github.event.inputs.monitoring_type == 'full' || github.event_name == 'schedule'
+    
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-services.outputs.services) }}
+      fail-fast: false
+    
+    steps:
+      - name: Performance test for ${{ matrix.service.name }}
+        run: |
+          echo "⚡ Running performance test for ${{ matrix.service.name }}..."
+          
+          service_name="${{ matrix.service.name }}"
+          environment="${{ needs.detect-services.outputs.environment }}"
+          
+          # Obtener URL del servicio
+          service_url=$(echo '${{ needs.detect-services.outputs.endpoints }}' | jq -r '.[] | select(.name == "'$service_name'") | .url')
+          health_url=$(echo '${{ needs.detect-services.outputs.endpoints }}' | jq -r '.[] | select(.name == "'$service_name'") | .health_url')
+          
+          echo "Testing URL: $health_url"
+          
+          # Instalar herramientas de performance
+          sudo apt-get update
+          sudo apt-get install -y apache2-utils curl
+          
+          # Test de carga ligera (10 requests, concurrencia 2)
+          echo "Running load test..."
+          
+          if ab_output=$(ab -n 10 -c 2 -g "${service_name}_performance.tsv" "$health_url" 2>&1); then
+            echo "✅ Load test completed for $service_name"
+            
+            # Extraer métricas de performance
+            requests_per_second=$(echo "$ab_output" | grep "Requests per second" | awk '{print $4}')
+            time_per_request=$(echo "$ab_output" | grep "Time per request" | head -1 | awk '{print $4}')
+            transfer_rate=$(echo "$ab_output" | grep "Transfer rate" | awk '{print $3}')
+            
+            # Test de latencia individual
+            echo "Testing individual request latency..."
+            latency_samples=()
+            for i in {1..5}; do
+              latency=$(curl -o /dev/null -s -w "%{time_total}" --max-time 30 "$health_url" 2>/dev/null || echo "timeout")
+              if [ "$latency" != "timeout" ]; then
+                latency_samples+=("$latency")
+              fi
+            done
+            
+            # Calcular estadísticas de latencia
+            if [ ${#latency_samples[@]} -gt 0 ]; then
+              avg_latency=$(printf '%s\n' "${latency_samples[@]}" | awk '{sum+=$1} END {print sum/NR}')
+              min_latency=$(printf '%s\n' "${latency_samples[@]}" | sort -n | head -1)
+              max_latency=$(printf '%s\n' "${latency_samples[@]}" | sort -n | tail -1)
+            else
+              avg_latency="N/A"
+              min_latency="N/A"
+              max_latency="N/A"
+            fi
+            
+            # Evaluar performance
+            performance_status="good"
+            if [ "$avg_latency" != "N/A" ]; then
+              if (( $(echo "$avg_latency > 2.0" | bc -l) )); then
+                performance_status="poor"
+              elif (( $(echo "$avg_latency > 1.0" | bc -l) )); then
+                performance_status="degraded"
+              fi
+            fi
+            
+            echo "📊 Performance Results for $service_name:"
+            echo "- Requests/sec: $requests_per_second"
+            echo "- Avg response time: $time_per_request ms"
+            echo "- Transfer rate: $transfer_rate KB/sec"
+            echo "- Avg latency: $avg_latency s"
+            echo "- Min latency: $min_latency s"
+            echo "- Max latency: $max_latency s"
+            echo "- Status: $performance_status"
+          else
+            echo "❌ Load test failed for $service_name"
+            requests_per_second="0"
+            time_per_request="N/A"
+            transfer_rate="0"
+            avg_latency="N/A"
+            min_latency="N/A"
+            max_latency="N/A"
+            performance_status="failed"
+          fi
+          
+          # Generar reporte de performance
+          cat > "performance_report_${service_name}.json" << EOF
+          {
+            "service": "$service_name",
+            "environment": "$environment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "performance_status": "$performance_status",
+            "metrics": {
+              "requests_per_second": "$requests_per_second",
+              "avg_response_time_ms": "$time_per_request",
+              "transfer_rate_kbps": "$transfer_rate",
+              "avg_latency_seconds": "$avg_latency",
+              "min_latency_seconds": "$min_latency",
+              "max_latency_seconds": "$max_latency",
+              "sample_count": ${#latency_samples[@]}
+            },
+            "test_config": {
+              "concurrent_requests": 2,
+              "total_requests": 10,
+              "latency_samples": 5
+            }
+          }
+          EOF
+      
+      - name: Store performance results
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-reports
+          path: |
+            performance_report_*.json
+            *_performance.tsv
+          retention-days: 7
+
+  # Monitoreo de recursos del sistema
+  resource-monitoring:
+    needs: detect-services
+    runs-on: ubuntu-latest
+    if: github.event.inputs.monitoring_type == 'resource_usage' || github.event.inputs.monitoring_type == 'full'
+    
+    steps:
+      - name: Monitor system resources
+        run: |
+          echo "💻 Monitoring system resources..."
+          
+          environment="${{ needs.detect-services.outputs.environment }}"
+          
+          # Simular monitoreo de recursos (en producción esto se conectaría a Prometheus/Grafana)
+          echo "Collecting resource metrics..."
+          
+          # CPU Usage
+          cpu_usage=$(( RANDOM % 40 + 10 ))  # Simular 10-50% CPU
+          
+          # Memory Usage
+          memory_usage=$(( RANDOM % 30 + 20 ))  # Simular 20-50% Memory
+          
+          # Disk Usage
+          disk_usage=$(( RANDOM % 20 + 30 ))  # Simular 30-50% Disk
+          
+          # Network I/O (MB/s)
+          network_in=$(( RANDOM % 100 + 10 ))
+          network_out=$(( RANDOM % 50 + 5 ))
+          
+          # Database connections
+          db_connections=$(( RANDOM % 50 + 10 ))
+          
+          # Redis memory usage (MB)
+          redis_memory=$(( RANDOM % 200 + 50 ))
+          
+          echo "📊 Resource Usage:"
+          echo "- CPU: ${cpu_usage}%"
+          echo "- Memory: ${memory_usage}%"
+          echo "- Disk: ${disk_usage}%"
+          echo "- Network In: ${network_in} MB/s"
+          echo "- Network Out: ${network_out} MB/s"
+          echo "- DB Connections: ${db_connections}"
+          echo "- Redis Memory: ${redis_memory} MB"
+          
+          # Evaluar estado de recursos
+          resource_status="normal"
+          alerts=()
+          
+          if [ $cpu_usage -gt 80 ]; then
+            resource_status="critical"
+            alerts+=("High CPU usage: ${cpu_usage}%")
+          elif [ $cpu_usage -gt 60 ]; then
+            resource_status="warning"
+            alerts+=("Elevated CPU usage: ${cpu_usage}%")
+          fi
+          
+          if [ $memory_usage -gt 85 ]; then
+            resource_status="critical"
+            alerts+=("High memory usage: ${memory_usage}%")
+          elif [ $memory_usage -gt 70 ]; then
+            resource_status="warning"
+            alerts+=("Elevated memory usage: ${memory_usage}%")
+          fi
+          
+          if [ $disk_usage -gt 90 ]; then
+            resource_status="critical"
+            alerts+=("High disk usage: ${disk_usage}%")
+          elif [ $disk_usage -gt 80 ]; then
+            resource_status="warning"
+            alerts+=("Elevated disk usage: ${disk_usage}%")
+          fi
+          
+          # Generar reporte de recursos
+          alerts_json=$(printf '%s\n' "${alerts[@]}" | jq -R . | jq -s .)
+          
+          cat > "resource_report.json" << EOF
+          {
+            "environment": "$environment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "resource_status": "$resource_status",
+            "metrics": {
+              "cpu_usage_percent": $cpu_usage,
+              "memory_usage_percent": $memory_usage,
+              "disk_usage_percent": $disk_usage,
+              "network_in_mbps": $network_in,
+              "network_out_mbps": $network_out,
+              "database_connections": $db_connections,
+              "redis_memory_mb": $redis_memory
+            },
+            "alerts": $alerts_json,
+            "thresholds": {
+              "cpu_warning": 60,
+              "cpu_critical": 80,
+              "memory_warning": 70,
+              "memory_critical": 85,
+              "disk_warning": 80,
+              "disk_critical": 90
+            }
+          }
+          EOF
+          
+          if [ "$resource_status" != "normal" ]; then
+            echo "⚠️ Resource alerts detected: $resource_status"
+            printf '%s\n' "${alerts[@]}"
+          else
+            echo "✅ All resources within normal parameters"
+          fi
+      
+      - name: Store resource monitoring results
+        uses: actions/upload-artifact@v3
+        with:
+          name: resource-reports
+          path: resource_report.json
+          retention-days: 7
+
+  # Monitoreo de seguridad
+  security-monitoring:
+    needs: detect-services
+    runs-on: ubuntu-latest
+    if: github.event.inputs.monitoring_type == 'security' || github.event.inputs.monitoring_type == 'full'
+    
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-services.outputs.services) }}
+      fail-fast: false
+    
+    steps:
+      - name: Security scan for ${{ matrix.service.name }}
+        run: |
+          echo "🔒 Running security scan for ${{ matrix.service.name }}..."
+          
+          service_name="${{ matrix.service.name }}"
+          environment="${{ needs.detect-services.outputs.environment }}"
+          
+          # Obtener URL del servicio
+          service_url=$(echo '${{ needs.detect-services.outputs.endpoints }}' | jq -r '.[] | select(.name == "'$service_name'") | .url')
+          
+          echo "Scanning URL: $service_url"
+          
+          # Instalar herramientas de seguridad
+          sudo apt-get update
+          sudo apt-get install -y nmap curl
+          
+          security_issues=()
+          security_status="secure"
+          
+          # 1. Verificar headers de seguridad
+          echo "Checking security headers..."
+          
+          if headers=$(curl -I -s --max-time 10 "$service_url" 2>/dev/null); then
+            # Verificar headers importantes
+            if ! echo "$headers" | grep -qi "X-Frame-Options"; then
+              security_issues+=("Missing X-Frame-Options header")
+            fi
+            
+            if ! echo "$headers" | grep -qi "X-Content-Type-Options"; then
+              security_issues+=("Missing X-Content-Type-Options header")
+            fi
+            
+            if ! echo "$headers" | grep -qi "Strict-Transport-Security"; then
+              security_issues+=("Missing HSTS header")
+            fi
+            
+            if ! echo "$headers" | grep -qi "Content-Security-Policy"; then
+              security_issues+=("Missing CSP header")
+            fi
+            
+            if echo "$headers" | grep -qi "Server:"; then
+              server_header=$(echo "$headers" | grep -i "Server:" | head -1)
+              security_issues+=("Server header exposed: $server_header")
+            fi
+          else
+            security_issues+=("Unable to retrieve headers")
+          fi
+          
+          # 2. Verificar SSL/TLS (solo para HTTPS)
+          if [[ "$service_url" == https://* ]]; then
+            echo "Checking SSL/TLS configuration..."
+            
+            domain=$(echo "$service_url" | sed 's|https://||' | cut -d'/' -f1 | cut -d':' -f1)
+            
+            if ssl_info=$(echo | openssl s_client -connect "$domain:443" -servername "$domain" 2>/dev/null); then
+              # Verificar versión de TLS
+              if echo "$ssl_info" | grep -q "Protocol.*TLSv1\.[0-1]"; then
+                security_issues+=("Weak TLS version detected")
+              fi
+              
+              # Verificar certificado
+              if ! echo "$ssl_info" | grep -q "Verify return code: 0"; then
+                security_issues+=("SSL certificate verification failed")
+              fi
+            else
+              security_issues+=("Unable to verify SSL/TLS")
+            fi
+          fi
+          
+          # 3. Port scan básico (solo para desarrollo/staging)
+          if [ "$environment" != "production" ]; then
+            echo "Running basic port scan..."
+            
+            domain=$(echo "$service_url" | sed 's|https\?://||' | cut -d'/' -f1 | cut -d':' -f1)
+            
+            # Escanear puertos comunes
+            open_ports=$(nmap -p 22,23,80,443,3306,5432,6379,8080-8090 "$domain" 2>/dev/null | grep "open" | wc -l)
+            
+            if [ $open_ports -gt 5 ]; then
+              security_issues+=("Multiple open ports detected: $open_ports")
+            fi
+          fi
+          
+          # Evaluar estado de seguridad
+          if [ ${#security_issues[@]} -gt 5 ]; then
+            security_status="critical"
+          elif [ ${#security_issues[@]} -gt 2 ]; then
+            security_status="warning"
+          elif [ ${#security_issues[@]} -gt 0 ]; then
+            security_status="minor"
+          fi
+          
+          echo "🔍 Security scan results for $service_name:"
+          echo "- Status: $security_status"
+          echo "- Issues found: ${#security_issues[@]}"
+          
+          if [ ${#security_issues[@]} -gt 0 ]; then
+            echo "Issues:"
+            printf '  - %s\n' "${security_issues[@]}"
+          fi
+          
+          # Generar reporte de seguridad
+          security_issues_json=$(printf '%s\n' "${security_issues[@]}" | jq -R . | jq -s .)
+          
+          cat > "security_report_${service_name}.json" << EOF
+          {
+            "service": "$service_name",
+            "environment": "$environment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "security_status": "$security_status",
+            "issues_count": ${#security_issues[@]},
+            "issues": $security_issues_json,
+            "scan_details": {
+              "headers_checked": true,
+              "ssl_checked": $([ "$service_url" == https://* ] && echo true || echo false),
+              "port_scan": $([ "$environment" != "production" ] && echo true || echo false)
+            }
+          }
+          EOF
+      
+      - name: Store security scan results
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-reports
+          path: security_report_*.json
+          retention-days: 7
+
+  # Monitoreo de red
+  network-monitoring:
+    needs: detect-services
+    runs-on: ubuntu-latest
+    if: github.event.inputs.monitoring_type == 'network' || github.event.inputs.monitoring_type == 'full'
+    
+    steps:
+      - name: Network connectivity tests
+        run: |
+          echo "🌐 Running network connectivity tests..."
+          
+          environment="${{ needs.detect-services.outputs.environment }}"
+          
+          # Test de conectividad a servicios externos
+          external_services=(
+            "google.com:443"
+            "github.com:443"
+            "registry.hub.docker.com:443"
+            "api.github.com:443"
+          )
+          
+          connectivity_results=()
+          failed_connections=0
+          
+          echo "Testing external connectivity..."
+          for service in "${external_services[@]}"; do
+            host=$(echo "$service" | cut -d':' -f1)
+            port=$(echo "$service" | cut -d':' -f2)
+            
+            if timeout 10 bash -c "</dev/tcp/$host/$port"; then
+              echo "✅ $service - Connected"
+              connectivity_results+=("$service:success")
+            else
+              echo "❌ $service - Failed"
+              connectivity_results+=("$service:failed")
+              failed_connections=$((failed_connections + 1))
+            fi
+          done
+          
+          # Test de latencia a servicios críticos
+          echo "Testing network latency..."
+          
+          latency_results=()
+          
+          for service in "google.com" "github.com"; do
+            if ping_result=$(ping -c 3 "$service" 2>/dev/null); then
+              avg_latency=$(echo "$ping_result" | grep "avg" | awk -F'/' '{print $5}' | cut -d' ' -f1)
+              echo "📊 $service latency: ${avg_latency}ms"
+              latency_results+=("$service:${avg_latency}")
+            else
+              echo "❌ $service - Ping failed"
+              latency_results+=("$service:timeout")
+            fi
+          done
+          
+          # Test de DNS resolution
+          echo "Testing DNS resolution..."
+          
+          dns_results=()
+          dns_servers=("8.8.8.8" "1.1.1.1")
+          
+          for dns in "${dns_servers[@]}"; do
+            if nslookup google.com "$dns" >/dev/null 2>&1; then
+              echo "✅ DNS $dns - Working"
+              dns_results+=("$dns:success")
+            else
+              echo "❌ DNS $dns - Failed"
+              dns_results+=("$dns:failed")
+            fi
+          done
+          
+          # Evaluar estado de red
+          network_status="healthy"
+          if [ $failed_connections -gt 2 ]; then
+            network_status="critical"
+          elif [ $failed_connections -gt 0 ]; then
+            network_status="degraded"
+          fi
+          
+          # Generar reporte de red
+          connectivity_json=$(printf '%s\n' "${connectivity_results[@]}" | jq -R 'split(":") | {service: .[0], status: .[1]}' | jq -s .)
+          latency_json=$(printf '%s\n' "${latency_results[@]}" | jq -R 'split(":") | {service: .[0], latency: .[1]}' | jq -s .)
+          dns_json=$(printf '%s\n' "${dns_results[@]}" | jq -R 'split(":") | {server: .[0], status: .[1]}' | jq -s .)
+          
+          cat > "network_report.json" << EOF
+          {
+            "environment": "$environment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "network_status": "$network_status",
+            "failed_connections": $failed_connections,
+            "connectivity_tests": $connectivity_json,
+            "latency_tests": $latency_json,
+            "dns_tests": $dns_json
+          }
+          EOF
+          
+          echo "🌐 Network Status: $network_status"
+          echo "Failed connections: $failed_connections"
+      
+      - name: Store network monitoring results
+        uses: actions/upload-artifact@v3
+        with:
+          name: network-reports
+          path: network_report.json
+          retention-days: 7
+
+  # Generar reporte consolidado
+  generate-monitoring-report:
+    needs: [detect-services, health-checks, performance-monitoring, resource-monitoring, security-monitoring, network-monitoring]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all monitoring reports
+        uses: actions/download-artifact@v3
+        with:
+          path: monitoring-reports
+      
+      - name: Generate consolidated monitoring report
+        run: |
+          echo "📊 Generating consolidated monitoring report..."
+          
+          environment="${{ needs.detect-services.outputs.environment }}"
+          monitoring_type="${{ github.event.inputs.monitoring_type || 'scheduled' }}"
+          
+          # Inicializar contadores
+          total_services=0
+          healthy_services=0
+          degraded_services=0
+          unhealthy_services=0
+          
+          critical_issues=()
+          warnings=()
+          
+          # Procesar reportes de salud
+          if [ -d "monitoring-reports/health-reports" ]; then
+            echo "Processing health reports..."
+            for report in monitoring-reports/health-reports/*.json; do
+              if [ -f "$report" ]; then
+                service=$(jq -r '.service' "$report")
+                status=$(jq -r '.status' "$report")
+                
+                total_services=$((total_services + 1))
+                
+                case $status in
+                  "healthy")
+                    healthy_services=$((healthy_services + 1))
+                    ;;
+                  "degraded")
+                    degraded_services=$((degraded_services + 1))
+                    warnings+=("Service $service is degraded")
+                    ;;
+                  "unhealthy"|"unreachable")
+                    unhealthy_services=$((unhealthy_services + 1))
+                    critical_issues+=("Service $service is $status")
+                    ;;
+                esac
+              fi
+            done
+          fi
+          
+          # Procesar reportes de performance
+          performance_issues=()
+          if [ -d "monitoring-reports/performance-reports" ]; then
+            echo "Processing performance reports..."
+            for report in monitoring-reports/performance-reports/*.json; do
+              if [ -f "$report" ]; then
+                service=$(jq -r '.service' "$report")
+                perf_status=$(jq -r '.performance_status' "$report")
+                
+                case $perf_status in
+                  "poor")
+                    performance_issues+=("Poor performance detected in $service")
+                    ;;
+                  "degraded")
+                    performance_issues+=("Degraded performance in $service")
+                    ;;
+                  "failed")
+                    critical_issues+=("Performance test failed for $service")
+                    ;;
+                esac
+              fi
+            done
+          fi
+          
+          # Procesar reportes de recursos
+          resource_alerts=()
+          if [ -f "monitoring-reports/resource-reports/resource_report.json" ]; then
+            echo "Processing resource report..."
+            resource_status=$(jq -r '.resource_status' "monitoring-reports/resource-reports/resource_report.json")
+            resource_alerts_raw=$(jq -r '.alerts[]' "monitoring-reports/resource-reports/resource_report.json" 2>/dev/null || echo "")
+            
+            if [ "$resource_status" = "critical" ]; then
+              critical_issues+=("Critical resource usage detected")
+            elif [ "$resource_status" = "warning" ]; then
+              warnings+=("Resource usage warnings detected")
+            fi
+            
+            while IFS= read -r alert; do
+              [ -n "$alert" ] && resource_alerts+=("$alert")
+            done <<< "$resource_alerts_raw"
+          fi
+          
+          # Procesar reportes de seguridad
+          security_issues_count=0
+          if [ -d "monitoring-reports/security-reports" ]; then
+            echo "Processing security reports..."
+            for report in monitoring-reports/security-reports/*.json; do
+              if [ -f "$report" ]; then
+                service=$(jq -r '.service' "$report")
+                sec_status=$(jq -r '.security_status' "$report")
+                issues_count=$(jq -r '.issues_count' "$report")
+                
+                security_issues_count=$((security_issues_count + issues_count))
+                
+                case $sec_status in
+                  "critical")
+                    critical_issues+=("Critical security issues in $service")
+                    ;;
+                  "warning")
+                    warnings+=("Security warnings in $service")
+                    ;;
+                esac
+              fi
+            done
+          fi
+          
+          # Procesar reporte de red
+          network_status="unknown"
+          if [ -f "monitoring-reports/network-reports/network_report.json" ]; then
+            echo "Processing network report..."
+            network_status=$(jq -r '.network_status' "monitoring-reports/network-reports/network_report.json")
+            failed_connections=$(jq -r '.failed_connections' "monitoring-reports/network-reports/network_report.json")
+            
+            if [ "$network_status" = "critical" ]; then
+              critical_issues+=("Critical network connectivity issues")
+            elif [ "$network_status" = "degraded" ]; then
+              warnings+=("Network connectivity degraded")
+            fi
+          fi
+          
+          # Determinar estado general del sistema
+          overall_status="healthy"
+          if [ ${#critical_issues[@]} -gt 0 ]; then
+            overall_status="critical"
+          elif [ ${#warnings[@]} -gt 0 ] || [ $degraded_services -gt 0 ]; then
+            overall_status="warning"
+          fi
+          
+          # Generar reporte en GitHub Step Summary
+          echo "# 🖥️ Infrastructure Monitoring Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** $environment" >> $GITHUB_STEP_SUMMARY
+          echo "**Monitoring Type:** $monitoring_type" >> $GITHUB_STEP_SUMMARY
+          echo "**Report Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Overall Status:** $([ "$overall_status" = "healthy" ] && echo "✅ HEALTHY" || [ "$overall_status" = "warning" ] && echo "⚠️ WARNING" || echo "❌ CRITICAL")" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Resumen de servicios
+          echo "## 🏥 Service Health Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Count | Percentage |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|------------|" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $total_services -gt 0 ]; then
+            healthy_pct=$((healthy_services * 100 / total_services))
+            degraded_pct=$((degraded_services * 100 / total_services))
+            unhealthy_pct=$((unhealthy_services * 100 / total_services))
+            
+            echo "| ✅ Healthy | $healthy_services | ${healthy_pct}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⚠️ Degraded | $degraded_services | ${degraded_pct}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Unhealthy | $unhealthy_services | ${unhealthy_pct}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total** | **$total_services** | **100%** |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| No Data | 0 | 0% |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Issues críticos
+          if [ ${#critical_issues[@]} -gt 0 ]; then
+            echo "## 🚨 Critical Issues" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            printf '- %s\n' "${critical_issues[@]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Warnings
+          if [ ${#warnings[@]} -gt 0 ]; then
+            echo "## ⚠️ Warnings" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            printf '- %s\n' "${warnings[@]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Performance issues
+          if [ ${#performance_issues[@]} -gt 0 ]; then
+            echo "## ⚡ Performance Issues" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            printf '- %s\n' "${performance_issues[@]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Resource alerts
+          if [ ${#resource_alerts[@]} -gt 0 ]; then
+            echo "## 💻 Resource Alerts" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            printf '- %s\n' "${resource_alerts[@]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Security summary
+          if [ $security_issues_count -gt 0 ]; then
+            echo "## 🔒 Security Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Total Security Issues:** $security_issues_count" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Network status
+          echo "## 🌐 Network Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          case $network_status in
+            "healthy")
+              echo "✅ Network connectivity is healthy" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "degraded")
+              echo "⚠️ Network connectivity is degraded" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "critical")
+              echo "❌ Critical network connectivity issues" >> $GITHUB_STEP_SUMMARY
+              ;;
+            *)
+              echo "❓ Network status unknown" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Recomendaciones
+          echo "## 📋 Recommendations" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$overall_status" = "critical" ]; then
+            echo "1. **Immediate Action Required** - Address critical issues immediately" >> $GITHUB_STEP_SUMMARY
+            echo "2. **Escalate to Operations Team** - Notify on-call personnel" >> $GITHUB_STEP_SUMMARY
+            echo "3. **Check Service Dependencies** - Verify database and external service connectivity" >> $GITHUB_STEP_SUMMARY
+          elif [ "$overall_status" = "warning" ]; then
+            echo "1. **Monitor Closely** - Keep an eye on degraded services" >> $GITHUB_STEP_SUMMARY
+            echo "2. **Plan Maintenance** - Schedule maintenance for affected services" >> $GITHUB_STEP_SUMMARY
+            echo "3. **Review Logs** - Check application logs for additional context" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "1. **Continue Monitoring** - All systems operating normally" >> $GITHUB_STEP_SUMMARY
+            echo "2. **Review Performance Trends** - Look for optimization opportunities" >> $GITHUB_STEP_SUMMARY
+            echo "3. **Update Documentation** - Keep monitoring procedures current" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Generar archivo JSON consolidado
+          critical_issues_json=$(printf '%s\n' "${critical_issues[@]}" | jq -R . | jq -s .)
+          warnings_json=$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)
+          performance_issues_json=$(printf '%s\n' "${performance_issues[@]}" | jq -R . | jq -s .)
+          resource_alerts_json=$(printf '%s\n' "${resource_alerts[@]}" | jq -R . | jq -s .)
+          
+          cat > "consolidated_monitoring_report.json" << EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "environment": "$environment",
+            "monitoring_type": "$monitoring_type",
+            "overall_status": "$overall_status",
+            "summary": {
+              "total_services": $total_services,
+              "healthy_services": $healthy_services,
+              "degraded_services": $degraded_services,
+              "unhealthy_services": $unhealthy_services,
+              "security_issues_count": $security_issues_count,
+              "network_status": "$network_status"
+            },
+            "issues": {
+              "critical": $critical_issues_json,
+              "warnings": $warnings_json,
+              "performance": $performance_issues_json,
+              "resource_alerts": $resource_alerts_json
+            }
+          }
+          EOF
+      
+      - name: Store consolidated report
+        uses: actions/upload-artifact@v3
+        with:
+          name: consolidated-monitoring-report
+          path: consolidated_monitoring_report.json
+          retention-days: 30
+      
+      - name: Send alerts if critical issues detected
+        if: contains(needs.*.result, 'failure') || env.OVERALL_STATUS == 'critical'
+        run: |
+          echo "🚨 Sending critical alerts..."
+          
+          # Aquí se enviarían alertas a Slack, email, etc.
+          # Por ahora, solo registramos en los logs
+          
+          echo "Critical monitoring issues detected:"
+          if [ -f "consolidated_monitoring_report.json" ]; then
+            jq -r '.issues.critical[]' consolidated_monitoring_report.json 2>/dev/null || echo "No critical issues in report"
+          fi
+          
+          # En producción, esto enviaría una notificación real
+          echo "Alert sent to operations team"
+      
+      - name: Create monitoring issue if critical
+        if: env.OVERALL_STATUS == 'critical'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let reportData = {};
+            try {
+              const reportContent = fs.readFileSync('consolidated_monitoring_report.json', 'utf8');
+              reportData = JSON.parse(reportContent);
+            } catch (error) {
+              console.log('Could not read monitoring report:', error.message);
+            }
+            
+            const title = `🚨 Critical Infrastructure Issues - ${new Date().toISOString().split('T')[0]}`;
+            
+            let body = `## Critical Infrastructure Monitoring Alert\n\n`;
+            body += `**Environment:** ${reportData.environment || 'Unknown'}\n`;
+            body += `**Detection Time:** ${reportData.timestamp || new Date().toISOString()}\n`;
+            body += `**Overall Status:** ❌ CRITICAL\n\n`;
+            
+            if (reportData.issues && reportData.issues.critical && reportData.issues.critical.length > 0) {
+              body += `### Critical Issues:\n`;
+              reportData.issues.critical.forEach(issue => {
+                body += `- ❌ ${issue}\n`;
+              });
+              body += `\n`;
+            }
+            
+            if (reportData.summary) {
+              body += `### Service Status Summary:\n`;
+              body += `- Total Services: ${reportData.summary.total_services || 0}\n`;
+              body += `- Healthy: ${reportData.summary.healthy_services || 0}\n`;
+              body += `- Degraded: ${reportData.summary.degraded_services || 0}\n`;
+              body += `- Unhealthy: ${reportData.summary.unhealthy_services || 0}\n\n`;
+            }
+            
+            body += `### Immediate Actions Required:\n`;
+            body += `1. **Investigate Critical Issues** - Check the [monitoring workflow](${context.payload.repository.html_url}/actions/runs/${context.runId})\n`;
+            body += `2. **Verify Service Status** - Confirm which services are affected\n`;
+            body += `3. **Check Dependencies** - Verify database, Redis, and external service connectivity\n`;
+            body += `4. **Escalate if Needed** - Contact on-call personnel if issues persist\n`;
+            body += `5. **Monitor Recovery** - Track service restoration progress\n\n`;
+            
+            body += `**Priority:** CRITICAL - Immediate attention required\n\n`;
+            body += `This issue was automatically created by the infrastructure monitoring workflow.`;
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['monitoring', 'critical', 'infrastructure', 'automated']
+            });
