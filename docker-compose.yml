@@ -63,7 +63,7 @@ services:
       context: ./frontend-pwa
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "3000:80"
     environment:
       - NODE_ENV=development
       - REACT_APP_AUTH_SERVICE_URL=http://localhost:8001
