@@ -95,11 +95,24 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
     
     // Reports
     Route::prefix('reports')->group(function () {
+        // Financial Reports
+        Route::get('/income-statement', [ReportController::class, 'incomeStatement']);
+        Route::get('/cash-flow', [ReportController::class, 'cashFlow']);
+        Route::get('/balance-sheet', [ReportController::class, 'balanceSheet']);
+        Route::get('/summary', [ReportController::class, 'summary']);
+        
+        // Chart Data
+        Route::get('/chart-data', [ReportController::class, 'chartData']);
+        
+        // Export endpoints
+        Route::get('/export/excel', [ReportController::class, 'exportExcel']);
+        Route::get('/export/pdf', [ReportController::class, 'exportPdf']);
+        Route::get('/export/csv', [ReportController::class, 'exportCsv']);
+        
+        // Legacy reports (mantener compatibilidad)
         Route::get('/income-expense', [ReportController::class, 'incomeExpenseReport']);
         Route::get('/financial-concepts', [ReportController::class, 'financialConceptsReport']);
         Route::get('/monthly-summary', [ReportController::class, 'monthlySummary']);
-        Route::get('/export/excel', [ReportController::class, 'exportExcel']);
-        Route::get('/export/pdf', [ReportController::class, 'exportPdf']);
     });
     
     // Dashboard
