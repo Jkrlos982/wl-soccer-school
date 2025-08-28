@@ -8,6 +8,8 @@ use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\VoucherController;
+use App\Http\Controllers\InvoiceController;
 
 /*
 |--------------------------------------------------------------------------
@@ -121,5 +123,49 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
         Route::get('/recent-transactions', [DashboardController::class, 'getRecentTransactions']);
         Route::get('/monthly-trends', [DashboardController::class, 'getMonthlyTrends']);
         Route::get('/top-concepts', [DashboardController::class, 'getTopConcepts']);
+    });
+    
+    // Vouchers Management
+    Route::prefix('vouchers')->group(function () {
+        // Generate vouchers
+        Route::post('/payments/{paymentId}/generate', [VoucherController::class, 'generatePaymentVoucher']);
+        Route::post('/payments/{paymentId}/receipt', [VoucherController::class, 'generateReceipt']);
+        
+        // Download generated vouchers
+        Route::get('/payments/{paymentId}/download', [VoucherController::class, 'downloadGenerated']);
+        
+        // Template management
+        Route::get('/templates', [VoucherController::class, 'getTemplates']);
+        
+        // Legacy voucher file management (existing functionality)
+        Route::post('/upload', [VoucherController::class, 'upload']);
+        Route::get('/download/{filename}', [VoucherController::class, 'download']);
+        Route::delete('/delete/{filename}', [VoucherController::class, 'delete']);
+        Route::get('/show/{filename}', [VoucherController::class, 'show']);
+        Route::post('/replace/{filename}', [VoucherController::class, 'replace']);
+    });
+    
+    // Invoices Management
+    Route::prefix('invoices')->group(function () {
+        // CRUD operations
+        Route::get('/', [InvoiceController::class, 'index']);
+        Route::post('/', [InvoiceController::class, 'store']);
+        Route::get('/{id}', [InvoiceController::class, 'show']);
+        Route::put('/{id}', [InvoiceController::class, 'update']);
+        Route::delete('/{id}', [InvoiceController::class, 'destroy']);
+        
+        // Invoice generation
+        Route::post('/generate-monthly', [InvoiceController::class, 'generateMonthly']);
+        
+        // Invoice state management
+        Route::patch('/{id}/mark-paid', [InvoiceController::class, 'markAsPaid']);
+        Route::patch('/{id}/cancel', [InvoiceController::class, 'cancel']);
+        
+        // Statistics and reporting
+        Route::get('/statistics', [InvoiceController::class, 'statistics']);
+        Route::get('/needing-attention', [InvoiceController::class, 'needingAttention']);
+        
+        // Maintenance operations
+        Route::post('/update-overdue', [InvoiceController::class, 'updateOverdue']);
     });
 });
