@@ -4,14 +4,23 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
+use App\Models\VoucherTemplate;
+use App\Services\VoucherGenerator;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Exception;
 
 class VoucherController extends Controller
 {
+    protected VoucherGenerator $voucherGenerator;
+
+    public function __construct(VoucherGenerator $voucherGenerator)
+    {
+        $this->voucherGenerator = $voucherGenerator;
+    }
     /**
      * Upload a voucher file
      */
@@ -301,6 +310,251 @@ class VoucherController extends Controller
                 'message' => 'Error replacing voucher',
                 'error' => $e->getMessage()
             ], 400);
+        }
+    }
+
+    /**
+     * Generate a payment voucher for a specific payment.
+     */
+    public function generatePaymentVoucher(Request $request, int $paymentId): JsonResponse
+    {
+        $request->validate([
+            'template_id' => 'nullable|exists:voucher_templates,id',
+            'regenerate' => 'boolean'
+        ]);
+
+        try {
+            $schoolId = $request->header('X-School-ID');
+            
+            if (!$schoolId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'School ID is required'
+                ], 400);
+            }
+
+            $payment = Payment::with([
+                'accountReceivable.concept',
+                'accountReceivable.student',
+                'createdBy'
+            ])->forSchool($schoolId)->findOrFail($paymentId);
+
+            $templateId = $request->input('template_id');
+            $regenerate = $request->boolean('regenerate', false);
+
+            // Check if voucher already exists and regenerate is not requested
+            if (!$regenerate && $payment->voucher_url) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Comprobante generado exitosamente',
+                    'data' => [
+                        'voucher_url' => $payment->voucher_url,
+                        'exists' => true
+                    ]
+                ]);
+            }
+
+            $voucherUrl = $this->voucherGenerator->generatePaymentVoucher(
+                $payment,
+                $templateId
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Comprobante generado exitosamente',
+                'data' => [
+                    'voucher_url' => $voucherUrl,
+                    'exists' => false
+                ]
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al generar el comprobante',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Generate a receipt for a specific payment.
+     */
+    public function generateReceipt(Request $request, int $paymentId): JsonResponse
+    {
+        $request->validate([
+            'template_id' => 'nullable|exists:voucher_templates,id',
+            'regenerate' => 'boolean'
+        ]);
+
+        try {
+            $schoolId = $request->header('X-School-ID');
+            
+            if (!$schoolId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'School ID is required'
+                ], 400);
+            }
+
+            $payment = Payment::with([
+                'accountReceivable.concept',
+                'accountReceivable.student',
+                'createdBy'
+            ])->forSchool($schoolId)->findOrFail($paymentId);
+
+            $templateId = $request->input('template_id');
+            $regenerate = $request->boolean('regenerate', false);
+
+            // Check if receipt already exists
+            if (!$regenerate && $payment->receipt_url) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Recibo generado exitosamente',
+                    'data' => [
+                        'receipt_url' => $payment->receipt_url,
+                        'exists' => true
+                    ]
+                ]);
+            }
+
+            $receiptUrl = $this->voucherGenerator->generateReceipt(
+                $payment,
+                $templateId
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Recibo generado exitosamente',
+                'data' => [
+                    'receipt_url' => $receiptUrl,
+                    'exists' => false
+                ]
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al generar el recibo',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Download a generated voucher or receipt.
+     */
+    public function downloadGenerated(Request $request, int $paymentId)
+    {
+        $request->validate([
+            'type' => ['required', Rule::in(['voucher', 'receipt'])]
+        ]);
+
+        try {
+            $schoolId = $request->header('X-School-ID');
+            
+            if (!$schoolId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'School ID is required'
+                ], 400);
+            }
+
+            $payment = Payment::forSchool($schoolId)->findOrFail($paymentId);
+
+            $type = $request->input('type');
+            $url = $type === 'voucher' ? $payment->voucher_url : $payment->receipt_url;
+
+            if (!$url) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El documento no ha sido generado'
+                ], 404);
+            }
+
+            // Extract file path from URL
+            $path = str_replace(asset('storage/'), '', $url);
+            
+            if (!Storage::disk('public')->exists($path)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El archivo no existe'
+                ], 404);
+            }
+
+            $filename = $type === 'voucher' 
+                ? "comprobante_{$payment->reference_number}.pdf"
+                : "recibo_{$payment->reference_number}.pdf";
+
+            return response()->download(
+                Storage::disk('public')->path($path),
+                $filename
+            );
+
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al descargar el documento',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get available voucher templates.
+     */
+    public function getTemplates(Request $request): JsonResponse
+    {
+        $request->validate([
+            'type' => ['nullable', Rule::in([
+                VoucherTemplate::TYPE_PAYMENT_VOUCHER,
+                VoucherTemplate::TYPE_RECEIPT
+            ])]
+        ]);
+
+        try {
+            $schoolId = $request->header('X-School-ID');
+            
+            if (!$schoolId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'School ID is required'
+                ], 400);
+            }
+
+            $type = $request->input('type');
+
+            $query = VoucherTemplate::query()
+                ->where(function ($q) use ($schoolId) {
+                    $q->whereNull('school_id')
+                      ->orWhere('school_id', $schoolId);
+                })
+                ->orderBy('is_default', 'desc')
+                ->orderBy('name');
+
+            if ($type) {
+                $query->where('type', $type);
+            }
+
+            $templates = $query->get([
+                'id',
+                'name',
+                'type',
+                'is_default',
+                'school_id'
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => $templates
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener las plantillas',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 }

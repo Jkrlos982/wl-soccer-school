@@ -8,6 +8,7 @@ use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\VoucherController;
 
 /*
 |--------------------------------------------------------------------------
@@ -121,5 +122,25 @@ Route::middleware('auth:sanctum')->prefix('v1')->group(function () {
         Route::get('/recent-transactions', [DashboardController::class, 'getRecentTransactions']);
         Route::get('/monthly-trends', [DashboardController::class, 'getMonthlyTrends']);
         Route::get('/top-concepts', [DashboardController::class, 'getTopConcepts']);
+    });
+    
+    // Vouchers Management
+    Route::prefix('vouchers')->group(function () {
+        // Generate vouchers
+        Route::post('/payments/{paymentId}/generate', [VoucherController::class, 'generatePaymentVoucher']);
+        Route::post('/payments/{paymentId}/receipt', [VoucherController::class, 'generateReceipt']);
+        
+        // Download generated vouchers
+        Route::get('/payments/{paymentId}/download', [VoucherController::class, 'downloadGenerated']);
+        
+        // Template management
+        Route::get('/templates', [VoucherController::class, 'getTemplates']);
+        
+        // Legacy voucher file management (existing functionality)
+        Route::post('/upload', [VoucherController::class, 'upload']);
+        Route::get('/download/{filename}', [VoucherController::class, 'download']);
+        Route::delete('/delete/{filename}', [VoucherController::class, 'delete']);
+        Route::get('/show/{filename}', [VoucherController::class, 'show']);
+        Route::post('/replace/{filename}', [VoucherController::class, 'replace']);
     });
 });

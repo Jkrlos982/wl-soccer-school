@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\AccountReceivable;
 use App\Models\Payment;
 use App\Models\FinancialConcept;
+use App\Services\VoucherGenerator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Exception;
@@ -12,6 +13,12 @@ use Carbon\Carbon;
 
 class AccountReceivableService
 {
+    protected VoucherGenerator $voucherGenerator;
+
+    public function __construct(VoucherGenerator $voucherGenerator)
+    {
+        $this->voucherGenerator = $voucherGenerator;
+    }
     /**
      * Create a new account receivable
      *
@@ -193,6 +200,20 @@ class AccountReceivableService
 
             // Update account receivable status
             $this->updateAccountReceivableStatus($payment->accountReceivable);
+
+            // Generate payment voucher automatically
+            try {
+                $this->voucherGenerator->generatePaymentVoucher($payment);
+                Log::info('Payment voucher generated automatically', [
+                    'payment_id' => $payment->id
+                ]);
+            } catch (Exception $voucherException) {
+                Log::warning('Failed to generate payment voucher automatically', [
+                    'payment_id' => $payment->id,
+                    'error' => $voucherException->getMessage()
+                ]);
+                // Don't fail the payment confirmation if voucher generation fails
+            }
 
             DB::commit();
 
