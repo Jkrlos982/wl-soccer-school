@@ -360,6 +360,121 @@ export class FinancialService {
     return response.data;
   }
 
+  // New Financial Report Export Methods
+  static async exportIncomeStatement(params: {
+    start_date: string;
+    end_date: string;
+    format: 'excel' | 'pdf' | 'csv';
+  }): Promise<Blob> {
+    const response = await ApiService.get('/reports/income-statement/export', {
+      params,
+      responseType: 'blob',
+    });
+    return response.data;
+  }
+
+  static async exportCashFlow(params: {
+    start_date: string;
+    end_date: string;
+    format: 'excel' | 'pdf' | 'csv';
+  }): Promise<Blob> {
+    const response = await ApiService.get('/reports/cash-flow/export', {
+      params,
+      responseType: 'blob',
+    });
+    return response.data;
+  }
+
+  static async exportBalanceSheet(params: {
+    start_date: string;
+    end_date: string;
+    format: 'excel' | 'pdf' | 'csv';
+  }): Promise<Blob> {
+    const response = await ApiService.get('/reports/balance-sheet/export', {
+      params,
+      responseType: 'blob',
+    });
+    return response.data;
+  }
+
+  static async exportSummary(params: {
+    start_date: string;
+    end_date: string;
+    format: 'excel' | 'pdf' | 'csv';
+  }): Promise<Blob> {
+    const response = await ApiService.get('/reports/summary/export', {
+      params,
+      responseType: 'blob',
+    });
+    return response.data;
+  }
+
+  // Chart Data Methods
+  static async getChartData(params: {
+    type: 'revenue_trend' | 'expense_distribution' | 'profit_trend' | 'category_revenue';
+    period: 'monthly' | 'quarterly' | 'yearly';
+    start_date?: string;
+    end_date?: string;
+    account_id?: string;
+  }): Promise<{ success: boolean; data: any[] }> {
+    const response = await ApiService.get('/reports/chart-data', {
+      params,
+    });
+    return response.data;
+  }
+
+  static async getRevenueTrendData(params: {
+    period: 'monthly' | 'quarterly' | 'yearly';
+    start_date?: string;
+    end_date?: string;
+    account_id?: string;
+  }): Promise<{ name: string; value: number }[]> {
+    const response = await this.getChartData({
+      ...params,
+      type: 'revenue_trend',
+    });
+    return response.data;
+  }
+
+  static async getExpenseDistributionData(params: {
+    start_date?: string;
+    end_date?: string;
+    account_id?: string;
+  }): Promise<{ name: string; value: number }[]> {
+    const response = await this.getChartData({
+      ...params,
+      type: 'expense_distribution',
+      period: 'monthly', // Default period for distribution
+    });
+    return response.data;
+  }
+
+  static async getProfitTrendData(params: {
+    period: 'monthly' | 'quarterly' | 'yearly';
+    start_date?: string;
+    end_date?: string;
+    account_id?: string;
+  }): Promise<{ name: string; income: number; expenses: number; profit: number }[]> {
+    const response = await this.getChartData({
+      ...params,
+      type: 'profit_trend',
+    });
+    return response.data;
+  }
+
+  static async getCategoryRevenueData(params: {
+    start_date?: string;
+    end_date?: string;
+    account_id?: string;
+  }): Promise<{ name: string; value: number }[]> {
+    const response = await this.getChartData({
+      ...params,
+      type: 'category_revenue',
+      period: 'monthly', // Default period for category data
+    });
+    return response.data;
+  }
+
   // Receipt Management
   static async generateReceipt(paymentId: string): Promise<{ receipt_url: string }> {
     const response = await ApiService.post(`/payments/${paymentId}/receipt`);
