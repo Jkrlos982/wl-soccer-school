@@ -84,6 +84,14 @@ export const isEmpty = (obj: any): boolean => {
   return false;
 };
 
+// Format currency
+export const formatCurrency = (amount: number, currency: string = 'COP', locale: string = 'es-CO'): string => {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: currency,
+  }).format(amount);
+};
+
 // Format file size
 export const formatFileSize = (bytes: number): string => {
   if (bytes === 0) return '0 Bytes';

@@ -2,12 +2,14 @@ import { configureStore } from '@reduxjs/toolkit';
 import { useDispatch, useSelector, TypedUseSelectorHook } from 'react-redux';
 import authReducer from './authSlice';
 import financialReducer from './financialSlice';
+import accountsReceivableReducer from './accountsReceivableSlice';
 
 // Configure store
 export const store = configureStore({
   reducer: {
     auth: authReducer,
     financial: financialReducer,
+    accountsReceivable: accountsReceivableReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
@@ -46,5 +48,16 @@ export const selectFinancialFilters = (state: RootState) => state.financial.filt
 export const selectSelectedTransaction = (state: RootState) => state.financial.selectedTransaction;
 export const selectFinancialLoading = (state: RootState) => state.financial.isLoading;
 export const selectFinancialErrors = (state: RootState) => state.financial.error;
+
+// Accounts Receivable Selectors
+export const selectAccountsReceivable = (state: RootState) => state.accountsReceivable;
+export const selectARList = (state: RootState) => state.accountsReceivable.accountsReceivable;
+export const selectARPayments = (state: RootState) => state.accountsReceivable.payments;
+export const selectARPaymentPlans = (state: RootState) => state.accountsReceivable.paymentPlans;
+export const selectCollectionReport = (state: RootState) => state.accountsReceivable.collectionReport;
+export const selectARFilters = (state: RootState) => state.accountsReceivable.filters;
+export const selectSelectedAR = (state: RootState) => state.accountsReceivable.selectedAR;
+export const selectARLoading = (state: RootState) => state.accountsReceivable.isLoading;
+export const selectARErrors = (state: RootState) => state.accountsReceivable.error;
 
 export default store;
