@@ -3,6 +3,7 @@ import { useDispatch, useSelector, TypedUseSelectorHook } from 'react-redux';
 import authReducer from './authSlice';
 import financialReducer from './financialSlice';
 import accountsReceivableReducer from './accountsReceivableSlice';
+import notificationReducer from './notificationSlice';
 
 // Configure store
 export const store = configureStore({
@@ -10,6 +11,7 @@ export const store = configureStore({
     auth: authReducer,
     financial: financialReducer,
     accountsReceivable: accountsReceivableReducer,
+    notification: notificationReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
