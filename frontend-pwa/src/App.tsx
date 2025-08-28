@@ -14,6 +14,7 @@ import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
+import FinancialPage from './pages/FinancialPage';
 
 // Components
 import ProtectedRoute from './components/common/ProtectedRoute';
@@ -70,6 +71,16 @@ const AuthWrapper: React.FC = () => {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        } 
+      />
+      
+      {/* Financial Module */}
+      <Route 
+        path="/financial/*" 
+        element={
+          <ProtectedRoute requiredRoles={['admin', 'financial_manager']}>
+            <FinancialPage />
           </ProtectedRoute>
         } 
       />

@@ -28,6 +28,7 @@ import {
   fetchTransactions
 } from '../../store/financialSlice';
 import { Transaction } from '../../types/financial';
+import { FinancialCharts } from './charts';
 
 interface MetricCardProps {
   title: string;
@@ -259,6 +260,11 @@ const FinancialDashboard: React.FC = () => {
           />
         </Box>
       </Stack>
+
+      {/* Financial Charts */}
+      <Box sx={{ mb: 4 }}>
+        <FinancialCharts />
+      </Box>
 
       {/* Additional Statistics */}
       {statistics && (
