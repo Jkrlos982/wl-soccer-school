@@ -59,18 +59,22 @@ class Player extends Model
         return $this->belongsTo(Category::class);
     }
 
-    // TODO: Uncomment when Training and Attendance models are created
-    // public function trainings()
-    // {
-    //     return $this->belongsToMany(Training::class, 'attendances')
-    //                 ->withPivot(['status', 'arrival_time', 'notes', 'recorded_at'])
-    //                 ->withTimestamps();
-    // }
+    public function trainings()
+    {
+        return $this->belongsToMany(Training::class, 'attendances')
+                    ->withPivot(['status', 'arrival_time', 'notes', 'recorded_at'])
+                    ->withTimestamps();
+    }
 
-    // public function attendances()
-    // {
-    //     return $this->hasMany(Attendance::class);
-    // }
+    public function attendances()
+    {
+        return $this->hasMany(Attendance::class);
+    }
+
+    public function evaluations()
+    {
+        return $this->hasMany(PlayerEvaluation::class);
+    }
 
     // Accessors
     public function getFullNameAttribute()

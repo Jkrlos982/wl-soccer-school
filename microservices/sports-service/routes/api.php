@@ -129,6 +129,20 @@ Route::prefix('v1')->group(function () {
         Route::get('categories/{category}/attendance-report', [\App\Http\Controllers\AttendanceController::class, 'getCategoryAttendanceReport'])
             ->name('api.v1.attendances.category-report');
         
+        // Player Evaluation routes
+        Route::apiResource('player-evaluations', \App\Http\Controllers\PlayerEvaluationController::class)
+            ->names([
+                'index' => 'api.v1.player-evaluations.index',
+                'store' => 'api.v1.player-evaluations.store',
+                'show' => 'api.v1.player-evaluations.show',
+                'update' => 'api.v1.player-evaluations.update',
+                'destroy' => 'api.v1.player-evaluations.destroy'
+            ]);
+        
+        // Additional player evaluation routes
+        Route::get('players/{player}/progress', [\App\Http\Controllers\PlayerEvaluationController::class, 'getPlayerProgress'])
+            ->name('api.v1.players.progress');
+        
         // Future sports routes:
         // Route::apiResource('matches', MatchController::class);
         // Route::apiResource('tournaments', TournamentController::class);
