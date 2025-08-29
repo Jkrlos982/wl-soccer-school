@@ -73,6 +73,10 @@ class CategoryResource extends JsonResource
      */
     private function getTrainingDaysDisplay(): string
     {
+        if (!$this->training_days || !is_array($this->training_days)) {
+            return 'No definido';
+        }
+        
         $daysMap = [
             'monday' => 'Lunes',
             'tuesday' => 'Martes',
@@ -85,7 +89,7 @@ class CategoryResource extends JsonResource
         
         $displayDays = array_map(function($day) use ($daysMap) {
             return $daysMap[$day] ?? $day;
-        }, $this->training_days ?? []);
+        }, $this->training_days);
         
         return implode(', ', $displayDays);
     }
