@@ -67,4 +67,12 @@ class User extends Authenticatable implements JWTSubject
     {
         return [];
     }
+
+    /**
+     * Get the evaluations conducted by this user as an evaluator.
+     */
+    public function evaluations()
+    {
+        return $this->hasMany(PlayerEvaluation::class, 'evaluator_id');
+    }
 }
