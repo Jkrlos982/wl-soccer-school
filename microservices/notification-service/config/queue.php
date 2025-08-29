@@ -72,6 +72,34 @@ return [
             'after_commit' => false,
         ],
 
+        // Notification Service Queues
+        'notifications-high' => [
+            'driver' => 'redis',
+            'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
+            'queue' => 'notifications-high',
+            'retry_after' => 90,
+            'block_for' => null,
+            'after_commit' => false,
+        ],
+
+        'notifications-default' => [
+            'driver' => 'redis',
+            'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
+            'queue' => 'notifications-default',
+            'retry_after' => 90,
+            'block_for' => null,
+            'after_commit' => false,
+        ],
+
+        'notifications-low' => [
+            'driver' => 'redis',
+            'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
+            'queue' => 'notifications-low',
+            'retry_after' => 90,
+            'block_for' => null,
+            'after_commit' => false,
+        ],
+
     ],
 
     /*
@@ -107,6 +135,38 @@ return [
         'driver' => env('QUEUE_FAILED_DRIVER', 'database-uuids'),
         'database' => env('DB_CONNECTION', 'sqlite'),
         'table' => 'failed_jobs',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Notification Queue Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configuration specific to the notification service queues including
+    | priority levels, processing limits, and retry strategies.
+    |
+    */
+
+    'notifications' => [
+        'queues' => [
+            'high' => 'notifications-high',
+            'default' => 'notifications-default', 
+            'low' => 'notifications-low'
+        ],
+        'processing_limits' => [
+            'scheduled_batch_size' => env('NOTIFICATION_SCHEDULED_BATCH_SIZE', 100),
+            'retry_batch_size' => env('NOTIFICATION_RETRY_BATCH_SIZE', 50),
+            'max_retries' => env('NOTIFICATION_MAX_RETRIES', 3),
+        ],
+        'retry_delays' => [
+            1 => 60,    // 1 minute
+            2 => 300,   // 5 minutes  
+            3 => 900,   // 15 minutes
+        ],
+        'cleanup' => [
+            'sent_retention_days' => env('NOTIFICATION_SENT_RETENTION_DAYS', 30),
+            'failed_retention_days' => env('NOTIFICATION_FAILED_RETENTION_DAYS', 90),
+        ]
     ],
 
 ];
