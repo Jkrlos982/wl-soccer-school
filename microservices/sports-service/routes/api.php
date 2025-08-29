@@ -161,6 +161,18 @@ Route::prefix('v1')->group(function () {
         Route::get('statistics/school', [\App\Http\Controllers\StatisticsController::class, 'getSchoolStatistics'])
             ->name('api.v1.statistics.school');
         
+        // Sports Reports endpoints
+        Route::prefix('reports')->group(function () {
+            Route::get('attendance', [\App\Http\Controllers\SportsReportsController::class, 'attendanceReport'])
+                ->name('api.v1.reports.attendance');
+            Route::get('performance', [\App\Http\Controllers\SportsReportsController::class, 'performanceReport'])
+                ->name('api.v1.reports.performance');
+            Route::get('training', [\App\Http\Controllers\SportsReportsController::class, 'trainingReport'])
+                ->name('api.v1.reports.training');
+            Route::post('export', [\App\Http\Controllers\SportsReportsController::class, 'exportReport'])
+                ->name('api.v1.reports.export');
+        });
+        
         // Future sports routes:
         // Route::apiResource('matches', MatchController::class);
         // Route::apiResource('tournaments', TournamentController::class);

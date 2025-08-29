@@ -1,0 +1,1 @@
+{"message":"PDF generation not implemented yet","report_type":"attendance","data":{"period":{"from":"2025-01-01","to":"2025-12-31"},"summary":{"total_sessions":0,"total_attendances":0,"present_count":0,"absent_count":0,"late_count":0,"overall_rate":0},"by_category":[],"by_player":[],"trends":[]}}
