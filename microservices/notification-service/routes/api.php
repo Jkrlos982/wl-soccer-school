@@ -3,6 +3,7 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\WhatsAppController;
+use App\Http\Controllers\EmailController;
 
 /*
 |--------------------------------------------------------------------------
@@ -50,6 +51,52 @@ Route::prefix('whatsapp')->group(function () {
         // Mark message as read
         Route::post('/mark-read', [WhatsAppController::class, 'markAsRead'])
             ->name('whatsapp.mark.read');
+    });
+});
+
+// Email Service Routes
+Route::prefix('email')->group(function () {
+    // Status endpoint (no auth for monitoring)
+    Route::get('/status', [EmailController::class, 'getStatus'])
+        ->name('email.status');
+    
+    // Email validation endpoint (no auth for basic validation)
+    Route::post('/validate', [EmailController::class, 'validateEmail'])
+        ->name('email.validate');
+    
+    // Protected endpoints for email management
+    Route::middleware(['auth:sanctum'])->group(function () {
+        // Send transactional email
+        Route::post('/send/transactional', [EmailController::class, 'sendTransactional'])
+            ->name('email.send.transactional');
+        
+        // Send templated email
+        Route::post('/send/templated', [EmailController::class, 'sendTemplated'])
+            ->name('email.send.templated');
+        
+        // Send bulk emails
+        Route::post('/send/bulk', [EmailController::class, 'sendBulk'])
+            ->name('email.send.bulk');
+        
+        // Send bulk templated emails
+        Route::post('/send/bulk-templated', [EmailController::class, 'sendBulkTemplated'])
+            ->name('email.send.bulk.templated');
+        
+        // Preview email template
+        Route::post('/preview', [EmailController::class, 'previewTemplate'])
+            ->name('email.preview');
+        
+        // Create email template
+        Route::post('/template/create', [EmailController::class, 'createTemplate'])
+            ->name('email.template.create');
+        
+        // Get email statistics
+        Route::get('/statistics', [EmailController::class, 'getStatistics'])
+            ->name('email.statistics');
+        
+        // Test email configuration
+        Route::post('/test', [EmailController::class, 'testConfiguration'])
+            ->name('email.test');
     });
 });
 
