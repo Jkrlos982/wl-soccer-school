@@ -76,6 +76,11 @@ class Player extends Model
         return $this->hasMany(PlayerEvaluation::class);
     }
 
+    public function statistics()
+    {
+        return $this->hasMany(PlayerStatistic::class);
+    }
+
     // Accessors
     public function getFullNameAttribute()
     {

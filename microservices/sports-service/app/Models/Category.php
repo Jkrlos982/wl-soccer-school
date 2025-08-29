@@ -34,15 +34,15 @@ class Category extends Model
         return $this->belongsTo(User::class, 'coach_id');
     }
     
-    // public function players()
-    // {
-    //     return $this->hasMany(Player::class);
-    // }
+    public function players()
+    {
+        return $this->hasMany(Player::class);
+    }
     
-    // public function trainings()
-    // {
-    //     return $this->hasMany(Training::class);
-    // }
+    public function trainings()
+    {
+        return $this->hasMany(Training::class);
+    }
     
     // Scopes
     public function scopeActive($query)
