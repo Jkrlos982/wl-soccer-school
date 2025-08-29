@@ -66,7 +66,7 @@ const CategoryForm: React.FC<CategoryFormProps> = ({
     }
   }, [error, dispatch]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = (e.target as HTMLInputElement).checked;
     
@@ -383,14 +383,14 @@ const CategoryForm: React.FC<CategoryFormProps> = ({
                 type="checkbox"
                 name="training_days"
                 value={day.value}
-                checked={formData.training_days.includes(day.value)}
+                checked={formData.training_days?.includes(day.value) || false}
                 onChange={(e) => {
                   const { value, checked } = e.target;
                   setFormData(prev => ({
                     ...prev,
                     training_days: checked
-                      ? [...prev.training_days, value]
-                      : prev.training_days.filter(d => d !== value)
+                      ? [...(prev.training_days || []), value]
+                      : (prev.training_days || []).filter(d => d !== value)
                   }));
                 }}
                 className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"

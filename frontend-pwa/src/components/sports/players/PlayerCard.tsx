@@ -123,7 +123,7 @@ const PlayerCard: React.FC<PlayerCardProps> = ({
           )}
           <div className="flex justify-between text-sm">
             <span className="text-gray-600">Pie dominante:</span>
-            <span className="font-medium">{formatDominantFoot(player.dominant_foot)}</span>
+            <span className="font-medium">{formatDominantFoot(player.dominant_foot || 'right')}</span>
           </div>
         </div>
 

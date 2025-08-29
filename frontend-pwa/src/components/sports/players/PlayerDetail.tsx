@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../../store';
-import { fetchPlayerById, deletePlayer } from '../../../store/slices/sportsSlice';
+import { fetchPlayer as fetchPlayerById, deletePlayer } from '../../../store/sportsSlice';
 import { Player } from '../../../types/sports';
 
 interface PlayerDetailProps {
@@ -206,7 +206,7 @@ const PlayerDetail: React.FC<PlayerDetailProps> = ({
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Pie Dominante:</span>
-                <span className="font-medium">{formatDominantFoot(currentPlayer.dominant_foot)}</span>
+                <span className="font-medium">{formatDominantFoot(currentPlayer.dominant_foot || 'right')}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Altura:</span>

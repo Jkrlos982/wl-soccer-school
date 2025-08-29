@@ -21,7 +21,7 @@ const CategoryDetail: React.FC<CategoryDetailProps> = ({
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   
-  const { categories, categoriesLoading: loading, error } = useAppSelector(state => state.sports);
+  const { categories, isLoading: loading, error } = useAppSelector(state => state.sports);
   
   // Use prop category or find from store
   const category = propCategory || categories.data.find(cat => cat.id === id);
@@ -57,9 +57,9 @@ const CategoryDetail: React.FC<CategoryDetailProps> = ({
     if (confirmed) {
       try {
         if (onDelete) {
-          onDelete(category.id);
+          onDelete(category.id.toString());
         } else {
-          await dispatch(deleteCategory(category.id)).unwrap();
+          await dispatch(deleteCategory(category.id.toString())).unwrap();
           navigate('/sports/categories');
         }
       } catch (error) {

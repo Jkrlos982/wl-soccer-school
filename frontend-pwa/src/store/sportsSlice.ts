@@ -22,8 +22,8 @@ import {
   AttendanceStats,
   SportsDashboardData,
   PaginatedResponse,
-  ApiError,
-} from '../types';
+} from '../types/sports';
+import { ApiError } from '../types';
 import { sportsService } from '../services/sportsService';
 
 // Extended state interface for better state management
@@ -120,7 +120,7 @@ const initialState: ExtendedSportsState = {
   trainingFilters: {
     search: '',
     category_id: '',
-    status: '',
+    status: undefined,
     date_from: '',
     date_to: '',
     page: 1,
@@ -147,7 +147,7 @@ const initialState: ExtendedSportsState = {
   attendanceFilters: {
     training_id: '',
     player_id: '',
-    status: '',
+    status: undefined,
     date_from: '',
     date_to: '',
     page: 1,
@@ -675,7 +675,7 @@ const sportsSlice = createSlice({
       })
       .addCase(fetchCategories.rejected, (state, action) => {
         state.isLoading = false;
-        state.error = action.payload || null;
+        state.error = action.payload?.message || 'An error occurred';
       })
       .addCase(fetchCategory.fulfilled, (state, action) => {
         state.selectedCategory = action.payload;
@@ -712,7 +712,7 @@ const sportsSlice = createSlice({
       })
       .addCase(fetchPlayers.rejected, (state, action) => {
         state.isLoading = false;
-        state.error = action.payload || null;
+        state.error = action.payload?.message || 'An error occurred';
       })
       .addCase(fetchPlayer.fulfilled, (state, action) => {
         state.selectedPlayer = action.payload;
@@ -762,7 +762,7 @@ const sportsSlice = createSlice({
       })
       .addCase(fetchTrainings.rejected, (state, action) => {
         state.isLoading = false;
-        state.error = action.payload || null;
+        state.error = action.payload?.message || 'An error occurred';
       })
       .addCase(fetchUpcomingTrainings.fulfilled, (state, action) => {
         state.upcomingTrainings = action.payload;
@@ -829,7 +829,7 @@ const sportsSlice = createSlice({
       })
       .addCase(fetchAttendances.rejected, (state, action) => {
         state.isLoading = false;
-        state.error = action.payload || null;
+        state.error = action.payload?.message || 'An error occurred';
       })
       .addCase(updateAttendance.fulfilled, (state, action) => {
         const index = state.attendances.data.findIndex(att => att.id === action.payload.id);
@@ -860,7 +860,7 @@ const sportsSlice = createSlice({
       })
       .addCase(fetchDashboardData.rejected, (state, action) => {
         state.isLoading = false;
-        state.error = action.payload || null;
+        state.error = action.payload?.message || 'An error occurred';
       });
   },
 });

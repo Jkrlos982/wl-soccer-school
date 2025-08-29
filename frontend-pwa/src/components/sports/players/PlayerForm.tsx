@@ -511,19 +511,7 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, onSuccess, onCancel }) 
           <div>
             <h4 className="text-md font-medium text-gray-900 mb-4">Información Adicional</h4>
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Clubes Anteriores
-                </label>
-                <textarea
-                  name="previous_clubs"
-                  value={formData.previous_clubs}
-                  onChange={handleInputChange}
-                  rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Clubes donde ha jugado anteriormente..."
-                />
-              </div>
+
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -539,19 +527,7 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, onSuccess, onCancel }) 
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Notas Generales
-                </label>
-                <textarea
-                  name="notes"
-                  value={formData.notes}
-                  onChange={handleInputChange}
-                  rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Observaciones adicionales..."
-                />
-              </div>
+
 
               <div className="flex items-center">
                 <input

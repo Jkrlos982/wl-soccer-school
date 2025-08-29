@@ -32,7 +32,7 @@ const CategoryCard: React.FC<CategoryCardProps> = ({
         `¿Estás seguro de que deseas eliminar la categoría "${category.name}"?`
       );
       if (confirmed) {
-        onDelete(category.id);
+        onDelete(category.id.toString());
       }
     }
   };

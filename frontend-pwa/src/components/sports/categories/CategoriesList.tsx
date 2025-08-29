@@ -19,7 +19,7 @@ interface CategoriesListProps {
   onAdd?: () => void;
   selectable?: boolean;
   onSelect?: (category: Category) => void;
-  selectedId?: number;
+  selectedId?: string;
 }
 
 const CategoriesList: React.FC<CategoriesListProps> = ({
@@ -57,7 +57,7 @@ const CategoriesList: React.FC<CategoriesListProps> = ({
     dispatch(setCategoryFilters(localFilters));
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     if (window.confirm('¿Estás seguro de que deseas eliminar esta categoría?')) {
       try {
         await dispatch(deleteCategory(id)).unwrap();
