@@ -4,14 +4,15 @@ import authReducer from './authSlice';
 import financialReducer from './financialSlice';
 import accountsReceivableReducer from './accountsReceivableSlice';
 import notificationReducer from './notificationSlice';
+import sportsReducer from './sportsSlice';
 
-// Configure store
 export const store = configureStore({
   reducer: {
     auth: authReducer,
     financial: financialReducer,
     accountsReceivable: accountsReceivableReducer,
     notification: notificationReducer,
+    sports: sportsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
@@ -61,5 +62,10 @@ export const selectARFilters = (state: RootState) => state.accountsReceivable.fi
 export const selectSelectedAR = (state: RootState) => state.accountsReceivable.selectedAR;
 export const selectARLoading = (state: RootState) => state.accountsReceivable.isLoading;
 export const selectARErrors = (state: RootState) => state.accountsReceivable.error;
+
+// Sports Selectors
+export const selectSports = (state: RootState) => state.sports;
+export const selectSportsLoading = (state: RootState) => state.sports.isLoading;
+export const selectSportsError = (state: RootState) => state.sports.error;
 
 export default store;
