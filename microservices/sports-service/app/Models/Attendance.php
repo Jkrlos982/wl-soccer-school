@@ -17,12 +17,15 @@ class Attendance extends Model
         'date',
         'status',
         'arrival_time',
-        'notes'
+        'notes',
+        'recorded_by',
+        'recorded_at'
     ];
 
     protected $casts = [
         'date' => 'date',
-        'arrival_time' => 'datetime:H:i:s'
+        'arrival_time' => 'datetime:H:i',
+        'recorded_at' => 'datetime'
     ];
 
     // Relaciones
@@ -39,6 +42,11 @@ class Attendance extends Model
     public function player(): BelongsTo
     {
         return $this->belongsTo(Player::class);
+    }
+
+    public function recordedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'recorded_by');
     }
 
     // Scopes
@@ -60,5 +68,39 @@ class Attendance extends Model
     public function scopePending($query)
     {
         return $query->where('status', 'pending');
+    }
+
+    public function scopeByPlayer($query, $playerId)
+    {
+        return $query->where('player_id', $playerId);
+    }
+
+    public function scopeByTraining($query, $trainingId)
+    {
+        return $query->where('training_id', $trainingId);
+    }
+
+    public function scopeRecent($query, $limit = 10)
+    {
+        return $query->orderBy('date', 'desc')->limit($limit);
+    }
+
+    // Métodos auxiliares
+    public function isLate()
+    {
+        if (!$this->arrival_time || !$this->training) {
+            return false;
+        }
+        
+        return $this->arrival_time->gt($this->training->start_time);
+    }
+    
+    public function getLateDuration()
+    {
+        if (!$this->isLate()) {
+            return 0;
+        }
+        
+        return $this->training->start_time->diffInMinutes($this->arrival_time);
     }
 }

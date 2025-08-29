@@ -115,6 +115,20 @@ Route::prefix('v1')->group(function () {
         Route::get('trainings/statistics', [\App\Http\Controllers\Api\V1\TrainingController::class, 'statistics'])
             ->name('api.v1.trainings.statistics');
         
+        // Attendance routes
+        Route::get('attendances', [\App\Http\Controllers\AttendanceController::class, 'index'])
+            ->name('api.v1.attendances.index');
+        Route::get('trainings/{training}/attendances', [\App\Http\Controllers\AttendanceController::class, 'getByTraining'])
+            ->name('api.v1.attendances.by-training');
+        Route::put('attendances/{attendance}', [\App\Http\Controllers\AttendanceController::class, 'updateAttendance'])
+            ->name('api.v1.attendances.update');
+        Route::put('attendances/bulk-update', [\App\Http\Controllers\AttendanceController::class, 'bulkUpdateAttendance'])
+            ->name('api.v1.attendances.bulk-update');
+        Route::get('players/{player}/attendance-stats', [\App\Http\Controllers\AttendanceController::class, 'getPlayerAttendanceStats'])
+            ->name('api.v1.attendances.player-stats');
+        Route::get('categories/{category}/attendance-report', [\App\Http\Controllers\AttendanceController::class, 'getCategoryAttendanceReport'])
+            ->name('api.v1.attendances.category-report');
+        
         // Future sports routes:
         // Route::apiResource('matches', MatchController::class);
         // Route::apiResource('tournaments', TournamentController::class);
