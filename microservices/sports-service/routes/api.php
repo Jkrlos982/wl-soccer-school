@@ -91,6 +91,30 @@ Route::prefix('v1')->group(function () {
                 'destroy' => 'api.v1.teams.destroy'
             ]);
         
+        // Training routes
+        Route::apiResource('trainings', \App\Http\Controllers\Api\V1\TrainingController::class)
+            ->names([
+                'index' => 'api.v1.trainings.index',
+                'store' => 'api.v1.trainings.store',
+                'show' => 'api.v1.trainings.show',
+                'update' => 'api.v1.trainings.update',
+                'destroy' => 'api.v1.trainings.destroy'
+            ]);
+        
+        // Additional training routes
+        Route::post('trainings/{training}/start', [\App\Http\Controllers\Api\V1\TrainingController::class, 'startTraining'])
+            ->name('api.v1.trainings.start');
+        Route::post('trainings/{training}/complete', [\App\Http\Controllers\Api\V1\TrainingController::class, 'completeTraining'])
+            ->name('api.v1.trainings.complete');
+        Route::post('trainings/{training}/cancel', [\App\Http\Controllers\Api\V1\TrainingController::class, 'cancelTraining'])
+            ->name('api.v1.trainings.cancel');
+        Route::get('trainings/upcoming', [\App\Http\Controllers\Api\V1\TrainingController::class, 'getUpcoming'])
+            ->name('api.v1.trainings.upcoming');
+        Route::get('categories/{categoryId}/trainings', [\App\Http\Controllers\Api\V1\TrainingController::class, 'byCategory'])
+            ->name('api.v1.trainings.by-category');
+        Route::get('trainings/statistics', [\App\Http\Controllers\Api\V1\TrainingController::class, 'statistics'])
+            ->name('api.v1.trainings.statistics');
+        
         // Future sports routes:
         // Route::apiResource('matches', MatchController::class);
         // Route::apiResource('tournaments', TournamentController::class);
