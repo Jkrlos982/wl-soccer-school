@@ -1,238 +1,216 @@
--- Migraciones para Notification Service
--- Base de datos: wl_school_notifications
+-- WL School Notification Service Database Schema
+-- Created for microservices architecture
 
 USE wl_school_notifications;
 
--- Tabla de plantillas de notificación
-CREATE TABLE notification_templates (
+-- Notifications table - stores all notification records
+CREATE TABLE IF NOT EXISTS notifications (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    type ENUM('email', 'sms', 'push', 'in_app') NOT NULL,
-    category ENUM('academic', 'financial', 'sports', 'medical', 'general', 'emergency') NOT NULL,
-    subject VARCHAR(255),
-    title VARCHAR(150),
-    body TEXT NOT NULL,
-    variables JSON, -- Variables disponibles para la plantilla
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_type_category (type, category),
-    INDEX idx_is_active (is_active)
-);
-
--- Tabla de canales de notificación
-CREATE TABLE notification_channels (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    type ENUM('email', 'sms', 'push', 'webhook') NOT NULL,
-    configuration JSON NOT NULL, -- Configuración específica del canal
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_type (type),
-    INDEX idx_is_active (is_active)
-);
-
--- Tabla de grupos de destinatarios
-CREATE TABLE recipient_groups (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    description TEXT,
-    criteria JSON, -- Criterios para incluir usuarios automáticamente
-    is_dynamic BOOLEAN DEFAULT FALSE, -- Si se actualiza automáticamente
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_name (name)
-);
-
--- Tabla de miembros de grupos
-CREATE TABLE group_members (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    group_id BIGINT UNSIGNED NOT NULL,
-    user_id BIGINT UNSIGNED NOT NULL,
-    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    added_by BIGINT UNSIGNED,
-    FOREIGN KEY (group_id) REFERENCES recipient_groups(id) ON DELETE CASCADE,
-    UNIQUE KEY unique_group_user (group_id, user_id),
-    INDEX idx_user_id (user_id)
-);
-
--- Tabla de notificaciones
-CREATE TABLE notifications (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    uuid CHAR(36) UNIQUE NOT NULL,
-    template_id BIGINT UNSIGNED,
-    sender_id BIGINT UNSIGNED,
-    title VARCHAR(255) NOT NULL,
+    uuid VARCHAR(36) NOT NULL UNIQUE,
+    type VARCHAR(50) NOT NULL, -- email, sms, whatsapp, push, in_app
+    channel VARCHAR(50) NOT NULL, -- specific channel within type
+    recipient_type VARCHAR(50) NOT NULL, -- user, student, parent, teacher, admin
+    recipient_id BIGINT UNSIGNED NOT NULL,
+    recipient_contact VARCHAR(255) NOT NULL, -- email, phone, device_token
+    subject VARCHAR(255) NULL,
+    title VARCHAR(255) NULL,
     message TEXT NOT NULL,
-    type ENUM('email', 'sms', 'push', 'in_app', 'broadcast') NOT NULL,
-    category ENUM('academic', 'financial', 'sports', 'medical', 'general', 'emergency') NOT NULL,
+    data JSON NULL, -- additional data for the notification
+    template_id BIGINT UNSIGNED NULL,
     priority ENUM('low', 'normal', 'high', 'urgent') DEFAULT 'normal',
+    status ENUM('pending', 'sent', 'delivered', 'failed', 'read') DEFAULT 'pending',
     scheduled_at TIMESTAMP NULL,
     sent_at TIMESTAMP NULL,
-    expires_at TIMESTAMP NULL,
-    status ENUM('draft', 'scheduled', 'sending', 'sent', 'failed', 'cancelled') DEFAULT 'draft',
-    metadata JSON, -- Datos adicionales específicos del tipo
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (template_id) REFERENCES notification_templates(id) ON DELETE SET NULL,
-    INDEX idx_uuid (uuid),
-    INDEX idx_type_category (type, category),
-    INDEX idx_status (status),
-    INDEX idx_scheduled_at (scheduled_at),
-    INDEX idx_priority (priority)
-);
-
--- Tabla de destinatarios de notificaciones
-CREATE TABLE notification_recipients (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    notification_id BIGINT UNSIGNED NOT NULL,
-    user_id BIGINT UNSIGNED NOT NULL,
-    recipient_type ENUM('to', 'cc', 'bcc') DEFAULT 'to',
-    contact_info VARCHAR(255), -- Email, teléfono, etc.
-    delivery_status ENUM('pending', 'sent', 'delivered', 'failed', 'bounced') DEFAULT 'pending',
     delivered_at TIMESTAMP NULL,
     read_at TIMESTAMP NULL,
-    clicked_at TIMESTAMP NULL,
-    error_message TEXT,
-    attempts INT DEFAULT 0,
+    failed_at TIMESTAMP NULL,
+    failure_reason TEXT NULL,
+    retry_count INT DEFAULT 0,
+    max_retries INT DEFAULT 3,
+    external_id VARCHAR(255) NULL, -- ID from external service (Twilio, etc.)
+    cost DECIMAL(8,4) DEFAULT 0.0000, -- cost of sending notification
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
-    INDEX idx_notification_user (notification_id, user_id),
-    INDEX idx_delivery_status (delivery_status),
-    INDEX idx_user_id (user_id)
+    
+    INDEX idx_recipient (recipient_type, recipient_id),
+    INDEX idx_status (status),
+    INDEX idx_type (type),
+    INDEX idx_scheduled (scheduled_at),
+    INDEX idx_created (created_at),
+    INDEX idx_uuid (uuid)
 );
 
--- Tabla de preferencias de notificación por usuario
-CREATE TABLE user_notification_preferences (
+-- Notification templates table
+CREATE TABLE IF NOT EXISTS notification_templates (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    type VARCHAR(50) NOT NULL, -- email, sms, whatsapp, push
+    subject VARCHAR(255) NULL,
+    title VARCHAR(255) NULL,
+    body TEXT NOT NULL,
+    variables JSON NULL, -- available variables for template
+    is_active BOOLEAN DEFAULT TRUE,
+    created_by BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    INDEX idx_name (name),
+    INDEX idx_type (type),
+    INDEX idx_active (is_active)
+);
+
+-- Notification preferences table - user preferences for notifications
+CREATE TABLE IF NOT EXISTS notification_preferences (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
-    category ENUM('academic', 'financial', 'sports', 'medical', 'general', 'emergency') NOT NULL,
+    user_type VARCHAR(50) NOT NULL, -- student, parent, teacher, admin
+    notification_type VARCHAR(50) NOT NULL, -- attendance, grades, payments, etc.
     email_enabled BOOLEAN DEFAULT TRUE,
     sms_enabled BOOLEAN DEFAULT FALSE,
+    whatsapp_enabled BOOLEAN DEFAULT FALSE,
     push_enabled BOOLEAN DEFAULT TRUE,
     in_app_enabled BOOLEAN DEFAULT TRUE,
-    frequency ENUM('immediate', 'daily_digest', 'weekly_digest', 'disabled') DEFAULT 'immediate',
-    quiet_hours_start TIME DEFAULT '22:00:00',
-    quiet_hours_end TIME DEFAULT '07:00:00',
+    frequency ENUM('immediate', 'daily', 'weekly', 'never') DEFAULT 'immediate',
+    quiet_hours_start TIME NULL,
+    quiet_hours_end TIME NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_user_category (user_id, category),
-    INDEX idx_user_id (user_id)
+    
+    UNIQUE KEY unique_user_type (user_id, user_type, notification_type),
+    INDEX idx_user (user_id, user_type)
 );
 
--- Tabla de dispositivos para push notifications
-CREATE TABLE user_devices (
+-- Device tokens table - for push notifications
+CREATE TABLE IF NOT EXISTS device_tokens (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
-    device_token VARCHAR(255) NOT NULL,
-    device_type ENUM('ios', 'android', 'web') NOT NULL,
-    device_name VARCHAR(100),
-    app_version VARCHAR(20),
-    os_version VARCHAR(20),
+    user_type VARCHAR(50) NOT NULL,
+    token VARCHAR(500) NOT NULL,
+    platform ENUM('ios', 'android', 'web') NOT NULL,
+    device_info JSON NULL,
     is_active BOOLEAN DEFAULT TRUE,
-    last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_user_id (user_id),
-    INDEX idx_device_token (device_token),
-    INDEX idx_is_active (is_active)
+    
+    UNIQUE KEY unique_token (token),
+    INDEX idx_user (user_id, user_type),
+    INDEX idx_active (is_active)
 );
 
--- Tabla de campañas de notificación
-CREATE TABLE notification_campaigns (
+-- Notification batches table - for bulk notifications
+CREATE TABLE IF NOT EXISTS notification_batches (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(150) NOT NULL,
-    description TEXT,
-    template_id BIGINT UNSIGNED,
-    target_groups JSON, -- IDs de grupos objetivo
-    target_criteria JSON, -- Criterios de segmentación
-    scheduled_at TIMESTAMP,
+    uuid VARCHAR(36) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    total_count INT DEFAULT 0,
+    sent_count INT DEFAULT 0,
+    failed_count INT DEFAULT 0,
+    status ENUM('pending', 'processing', 'completed', 'failed') DEFAULT 'pending',
     started_at TIMESTAMP NULL,
     completed_at TIMESTAMP NULL,
-    status ENUM('draft', 'scheduled', 'running', 'completed', 'paused', 'cancelled') DEFAULT 'draft',
-    total_recipients INT DEFAULT 0,
-    sent_count INT DEFAULT 0,
-    delivered_count INT DEFAULT 0,
-    failed_count INT DEFAULT 0,
-    created_by BIGINT UNSIGNED,
+    created_by BIGINT UNSIGNED NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (template_id) REFERENCES notification_templates(id) ON DELETE SET NULL,
+    
     INDEX idx_status (status),
-    INDEX idx_scheduled_at (scheduled_at)
+    INDEX idx_created (created_at)
 );
 
--- Tabla de eventos de notificación (para tracking)
-CREATE TABLE notification_events (
+-- Notification batch items table
+CREATE TABLE IF NOT EXISTS notification_batch_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    batch_id BIGINT UNSIGNED NOT NULL,
     notification_id BIGINT UNSIGNED NOT NULL,
-    recipient_id BIGINT UNSIGNED NOT NULL,
-    event_type ENUM('sent', 'delivered', 'opened', 'clicked', 'bounced', 'complained', 'unsubscribed') NOT NULL,
-    event_data JSON,
-    user_agent TEXT,
-    ip_address VARCHAR(45),
-    occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
-    FOREIGN KEY (recipient_id) REFERENCES notification_recipients(id) ON DELETE CASCADE,
-    INDEX idx_notification_id (notification_id),
-    INDEX idx_event_type (event_type),
-    INDEX idx_occurred_at (occurred_at)
-);
-
--- Tabla de configuración del sistema de notificaciones
-CREATE TABLE notification_settings (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    setting_key VARCHAR(100) UNIQUE NOT NULL,
-    setting_value TEXT,
-    description TEXT,
-    is_encrypted BOOLEAN DEFAULT FALSE,
-    updated_by BIGINT UNSIGNED,
+    status ENUM('pending', 'sent', 'failed') DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_setting_key (setting_key)
+    
+    FOREIGN KEY (batch_id) REFERENCES notification_batches(id) ON DELETE CASCADE,
+    FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
+    INDEX idx_batch (batch_id),
+    INDEX idx_status (status)
 );
 
--- Insertar plantillas por defecto
-INSERT INTO notification_templates (name, type, category, subject, title, body, variables) VALUES
-('Bienvenida Estudiante', 'email', 'general', 'Bienvenido a WL-School', 'Bienvenido {{student_name}}', 
- 'Estimado {{student_name}},\n\nBienvenido a WL-School. Tu código de estudiante es: {{student_code}}.\n\nSaludos cordiales,\nEquipo WL-School', 
- JSON_ARRAY('student_name', 'student_code')),
+-- Webhook logs table - for incoming webhooks
+CREATE TABLE IF NOT EXISTS webhook_logs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL, -- twilio, whatsapp, firebase, etc.
+    event_type VARCHAR(100) NOT NULL,
+    payload JSON NOT NULL,
+    headers JSON NULL,
+    notification_id BIGINT UNSIGNED NULL,
+    processed BOOLEAN DEFAULT FALSE,
+    processed_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE SET NULL,
+    INDEX idx_provider (provider),
+    INDEX idx_processed (processed),
+    INDEX idx_created (created_at)
+);
 
-('Recordatorio Pago', 'email', 'financial', 'Recordatorio de Pago - Factura {{invoice_number}}', 'Recordatorio de Pago', 
- 'Estimado padre de familia,\n\nLe recordamos que tiene una factura pendiente por ${{amount}} con vencimiento {{due_date}}.\n\nFactura: {{invoice_number}}\n\nGracias por su atención.', 
- JSON_ARRAY('invoice_number', 'amount', 'due_date', 'student_name')),
+-- Notification statistics table - for analytics
+CREATE TABLE IF NOT EXISTS notification_statistics (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    date DATE NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    channel VARCHAR(50) NOT NULL,
+    total_sent INT DEFAULT 0,
+    total_delivered INT DEFAULT 0,
+    total_failed INT DEFAULT 0,
+    total_read INT DEFAULT 0,
+    total_cost DECIMAL(10,4) DEFAULT 0.0000,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    UNIQUE KEY unique_date_type_channel (date, type, channel),
+    INDEX idx_date (date),
+    INDEX idx_type (type)
+);
 
-('Calificación Publicada', 'push', 'academic', NULL, 'Nueva Calificación', 
- 'Se ha publicado una nueva calificación para {{subject}}. Calificación: {{grade}}', 
- JSON_ARRAY('subject', 'grade', 'student_name')),
+-- Insert default notification templates
+INSERT INTO notification_templates (name, type, subject, title, body, variables) VALUES
+('welcome_email', 'email', 'Bienvenido a WL School', 'Bienvenido', 'Hola {{name}}, bienvenido a WL School. Tu cuenta ha sido creada exitosamente.', '["name", "email", "school_name"]'),
+('payment_reminder', 'email', 'Recordatorio de Pago - WL School', 'Recordatorio de Pago', 'Estimado {{parent_name}}, le recordamos que tiene un pago pendiente por ${{amount}} con vencimiento el {{due_date}}.', '["parent_name", "student_name", "amount", "due_date", "concept"]'),
+('attendance_alert', 'sms', NULL, 'Alerta de Asistencia', '{{student_name}} no asistió a clases hoy {{date}}. Para más información contacte la escuela.', '["student_name", "date", "parent_name"]'),
+('grade_notification', 'push', NULL, 'Nueva Calificación', '{{student_name}} tiene una nueva calificación en {{subject}}: {{grade}}', '["student_name", "subject", "grade", "teacher_name"]'),
+('event_reminder', 'whatsapp', NULL, 'Recordatorio de Evento', 'Recordatorio: {{event_name}} será el {{event_date}} a las {{event_time}}. ¡No faltes!', '["event_name", "event_date", "event_time", "location"]');
 
-('Partido Programado', 'in_app', 'sports', NULL, 'Nuevo Partido', 
- 'Se ha programado un partido de {{sport}} para el {{match_date}} contra {{opponent_team}}.', 
- JSON_ARRAY('sport', 'match_date', 'opponent_team', 'team_name')),
+-- Insert default notification preferences for common notification types
+INSERT INTO notification_preferences (user_id, user_type, notification_type, email_enabled, sms_enabled, whatsapp_enabled, push_enabled, in_app_enabled) VALUES
+(0, 'default', 'attendance', TRUE, TRUE, FALSE, TRUE, TRUE),
+(0, 'default', 'grades', TRUE, FALSE, FALSE, TRUE, TRUE),
+(0, 'default', 'payments', TRUE, TRUE, TRUE, TRUE, TRUE),
+(0, 'default', 'events', TRUE, FALSE, TRUE, TRUE, TRUE),
+(0, 'default', 'announcements', TRUE, FALSE, FALSE, TRUE, TRUE),
+(0, 'default', 'emergency', TRUE, TRUE, TRUE, TRUE, TRUE);
 
-('Emergencia Médica', 'sms', 'medical', NULL, 'Emergencia Médica', 
- 'URGENTE: Su hijo {{student_name}} requiere atención médica. Contacte inmediatamente al colegio.', 
- JSON_ARRAY('student_name'));
+-- Create indexes for better performance
+CREATE INDEX idx_notifications_composite ON notifications(type, status, created_at);
+CREATE INDEX idx_notifications_recipient_status ON notifications(recipient_type, recipient_id, status);
+CREATE INDEX idx_device_tokens_user_active ON device_tokens(user_id, user_type, is_active);
 
--- Insertar grupos por defecto
-INSERT INTO recipient_groups (name, description, criteria, is_dynamic) VALUES
-('Todos los Padres', 'Todos los padres de familia registrados', JSON_OBJECT('role', 'parent'), TRUE),
-('Todos los Estudiantes', 'Todos los estudiantes activos', JSON_OBJECT('role', 'student', 'status', 'active'), TRUE),
-('Profesores', 'Todo el personal docente', JSON_OBJECT('role', 'teacher'), TRUE),
-('Administradores', 'Personal administrativo', JSON_OBJECT('role', 'admin'), TRUE),
-('Estudiantes Primaria', 'Estudiantes de primaria', JSON_OBJECT('role', 'student', 'grade_level', 'primary'), TRUE),
-('Estudiantes Secundaria', 'Estudiantes de secundaria', JSON_OBJECT('role', 'student', 'grade_level', 'secondary'), TRUE);
+-- Create views for common queries
+CREATE VIEW notification_summary AS
+SELECT 
+    DATE(created_at) as date,
+    type,
+    status,
+    COUNT(*) as count,
+    SUM(cost) as total_cost
+FROM notifications 
+GROUP BY DATE(created_at), type, status;
 
--- Insertar configuraciones por defecto
-INSERT INTO notification_settings (setting_key, setting_value, description) VALUES
-('smtp_host', 'smtp.gmail.com', 'Servidor SMTP para envío de emails'),
-('smtp_port', '587', 'Puerto SMTP'),
-('smtp_encryption', 'tls', 'Tipo de encriptación SMTP'),
-('sms_provider', 'twilio', 'Proveedor de SMS'),
-('push_provider', 'firebase', 'Proveedor de push notifications'),
-('max_daily_emails', '1000', 'Máximo de emails por día'),
-('max_daily_sms', '500', 'Máximo de SMS por día'),
-('retry_attempts', '3', 'Intentos de reenvío en caso de fallo'),
-('batch_size', '100', 'Tamaño de lote para envío masivo');
+CREATE VIEW user_notification_stats AS
+SELECT 
+    recipient_type,
+    recipient_id,
+    COUNT(*) as total_notifications,
+    SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent_count,
+    SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) as delivered_count,
+    SUM(CASE WHEN status = 'read' THEN 1 ELSE 0 END) as read_count,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count
+FROM notifications 
+GROUP BY recipient_type, recipient_id;
