@@ -1,6 +1,7 @@
 // General application types
 export * from './auth';
 export * from './financial';
+export * from './sports';
 
 // API Response types
 export interface ApiResponse<T = any> {

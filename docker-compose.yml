@@ -57,6 +57,36 @@ services:
       - /var/www/html/vendor
       - /var/www/html/node_modules
 
+  # Sports Service
+  sports-service:
+    build:
+      context: ./microservices/sports-service
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8000"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=sports-db
+      - DB_PORT=3306
+      - DB_DATABASE=sports_service
+      - DB_USERNAME=sports_user
+      - DB_PASSWORD=sports_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=your-jwt-secret-key
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - FINANCIAL_SERVICE_URL=http://financial-service:8000
+    depends_on:
+      - sports-db
+      - redis
+    networks:
+      - wl-school-network
+    volumes:
+      - ./microservices/sports-service:/var/www/html
+      - ./storage/logs/sports:/var/www/html/storage/logs
+
   # Frontend PWA
   frontend-pwa:
     build:
@@ -68,9 +98,11 @@ services:
       - NODE_ENV=development
       - REACT_APP_AUTH_SERVICE_URL=http://localhost:8001
       - REACT_APP_FINANCIAL_SERVICE_URL=http://localhost:8002
+      - REACT_APP_SPORTS_SERVICE_URL=http://localhost:8003
     depends_on:
       - auth-service
       - financial-service
+      - sports-service
     networks:
       - wl-school-network
     volumes:
@@ -102,6 +134,21 @@ services:
     volumes:
       - mysql_financial_data:/var/lib/mysql
       - ./database/migrations/financial_service.sql:/docker-entrypoint-initdb.d/financial_service.sql
+    networks:
+      - wl-school-network
+
+  # Sports Database
+  sports-db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: sports_service
+      MYSQL_USER: sports_user
+      MYSQL_PASSWORD: sports_password
+    ports:
+      - "3309:3306"
+    volumes:
+      - mysql_sports_data:/var/lib/mysql
     networks:
       - wl-school-network
 
@@ -163,6 +210,7 @@ services:
 volumes:
   mysql_auth_data:
   mysql_financial_data:
+  mysql_sports_data:
   redis_data:
 
 networks:
