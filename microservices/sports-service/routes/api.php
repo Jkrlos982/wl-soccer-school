@@ -143,6 +143,24 @@ Route::prefix('v1')->group(function () {
         Route::get('players/{player}/progress', [\App\Http\Controllers\PlayerEvaluationController::class, 'getPlayerProgress'])
             ->name('api.v1.players.progress');
         
+        // Player Statistics routes
+        Route::apiResource('player-statistics', \App\Http\Controllers\PlayerStatisticController::class)
+            ->names([
+                'index' => 'api.v1.player-statistics.index',
+                'store' => 'api.v1.player-statistics.store',
+                'show' => 'api.v1.player-statistics.show',
+                'update' => 'api.v1.player-statistics.update',
+                'destroy' => 'api.v1.player-statistics.destroy'
+            ]);
+        
+        // Statistics endpoints
+        Route::get('statistics/players/{player}', [\App\Http\Controllers\StatisticsController::class, 'getPlayerStatistics'])
+            ->name('api.v1.statistics.player');
+        Route::get('statistics/categories/{category}', [\App\Http\Controllers\StatisticsController::class, 'getCategoryStatistics'])
+            ->name('api.v1.statistics.category');
+        Route::get('statistics/school', [\App\Http\Controllers\StatisticsController::class, 'getSchoolStatistics'])
+            ->name('api.v1.statistics.school');
+        
         // Future sports routes:
         // Route::apiResource('matches', MatchController::class);
         // Route::apiResource('tournaments', TournamentController::class);
