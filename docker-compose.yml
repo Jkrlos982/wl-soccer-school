@@ -87,6 +87,40 @@ services:
       - ./microservices/sports-service:/var/www/html
       - ./storage/logs/sports:/var/www/html/storage/logs
 
+  # Notification Service
+  notification-service:
+    build:
+      context: ./microservices/notification-service
+      dockerfile: Dockerfile
+    ports:
+      - "8004:80"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql-notifications
+      - DB_PORT=3306
+      - DB_DATABASE=wl_school_notifications
+      - DB_USERNAME=root
+      - DB_PASSWORD=password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - BROADCAST_DRIVER=pusher
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - FINANCIAL_SERVICE_URL=http://financial-service:8000
+      - SPORTS_SERVICE_URL=http://sports-service:8000
+    depends_on:
+      - mysql-notifications
+      - redis
+    networks:
+      - wl-school-network
+    volumes:
+      - ./microservices/notification-service:/var/www/html
+      - ./storage/logs/notifications:/var/www/html/storage/logs
+
   # Frontend PWA
   frontend-pwa:
     build:
@@ -99,10 +133,12 @@ services:
       - REACT_APP_AUTH_SERVICE_URL=http://localhost:8001
       - REACT_APP_FINANCIAL_SERVICE_URL=http://localhost:8002
       - REACT_APP_SPORTS_SERVICE_URL=http://localhost:8003
+      - REACT_APP_NOTIFICATION_SERVICE_URL=http://localhost:8004
     depends_on:
       - auth-service
       - financial-service
       - sports-service
+      - notification-service
     networks:
       - wl-school-network
     volumes:
@@ -152,6 +188,20 @@ services:
     networks:
       - wl-school-network
 
+  # Notifications Database
+  mysql-notifications:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: wl_school_notifications
+    ports:
+      - "3310:3306"
+    volumes:
+      - mysql_notifications_data:/var/lib/mysql
+      - ./database/migrations/notification_service.sql:/docker-entrypoint-initdb.d/notification_service.sql
+    networks:
+      - wl-school-network
+
   # Redis Cache
   redis:
     image: redis:7-alpine
@@ -192,6 +242,7 @@ services:
     depends_on:
       - mysql-auth
       - mysql-financial
+      - mysql-notifications
     networks:
       - wl-school-network
 
@@ -211,6 +262,7 @@ volumes:
   mysql_auth_data:
   mysql_financial_data:
   mysql_sports_data:
+  mysql_notifications_data:
   redis_data:
 
 networks:
