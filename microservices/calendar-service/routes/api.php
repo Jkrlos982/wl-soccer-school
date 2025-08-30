@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\GoogleCalendarController;
+use App\Http\Controllers\ReminderController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -55,6 +56,48 @@ Route::prefix('google-calendar')->group(function () {
         // List available Google calendars
         Route::get('/google-calendars', [GoogleCalendarController::class, 'listGoogleCalendars'])
             ->name('google-calendar.list');
+    });
+});
+
+/*
+|--------------------------------------------------------------------------
+| Reminder System Routes
+|--------------------------------------------------------------------------
+|
+| Routes for automatic reminder system management
+|
+*/
+
+Route::prefix('reminders')->group(function () {
+    // Get reminder statistics
+    Route::get('/stats', [ReminderController::class, 'getStats'])
+        ->name('reminders.stats');
+    
+    // Send immediate reminder
+    Route::post('/send-immediate', [ReminderController::class, 'sendImmediate'])
+        ->name('reminders.send-immediate');
+    
+    // Process reminders manually
+    Route::post('/process', [ReminderController::class, 'processReminders'])
+        ->name('reminders.process');
+    
+    // Get rate limit status
+    Route::get('/rate-limit-status', [ReminderController::class, 'getRateLimitStatus'])
+        ->name('reminders.rate-limit-status');
+    
+    // Get system health status
+    Route::get('/health', [ReminderController::class, 'getHealthStatus'])
+        ->name('reminders.health');
+    
+    // Get reminder configuration
+    Route::get('/config', [ReminderController::class, 'getConfig'])
+        ->name('reminders.config');
+    
+    // Admin routes
+    Route::middleware(['auth:sanctum', 'admin'])->group(function () {
+        // Clear rate limit for a user
+        Route::delete('/rate-limit/{userId}', [ReminderController::class, 'clearRateLimit'])
+            ->name('reminders.clear-rate-limit');
     });
 });
 

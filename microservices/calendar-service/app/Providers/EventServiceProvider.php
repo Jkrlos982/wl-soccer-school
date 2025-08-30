@@ -23,6 +23,11 @@ class EventServiceProvider extends ServiceProvider
         \App\Events\CalendarSyncCompleted::class => [
             \App\Listeners\SendCalendarSyncNotification::class,
         ],
+        
+        // Reminder Events
+        \App\Events\RemindersProcessed::class => [
+            \App\Listeners\LogReminderProcessing::class,
+        ],
     ];
 
     /**
