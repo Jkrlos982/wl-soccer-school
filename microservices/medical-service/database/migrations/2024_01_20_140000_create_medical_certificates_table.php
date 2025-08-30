@@ -43,6 +43,7 @@ return new class extends Migration
             
             // Estado del certificado
             $table->enum('status', ['draft', 'issued', 'expired', 'revoked'])->default('draft');
+            $table->enum('clearance_status', ['cleared', 'cleared_with_restrictions', 'not_cleared', 'pending_further_evaluation'])->nullable();
             $table->text('revocation_reason')->nullable();
             $table->date('revocation_date')->nullable();
             $table->unsignedBigInteger('revoked_by')->nullable();
