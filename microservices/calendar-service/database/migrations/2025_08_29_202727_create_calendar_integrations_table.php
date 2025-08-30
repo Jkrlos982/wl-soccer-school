@@ -36,7 +36,7 @@ return new class extends Migration
             $table->index(['user_id', 'provider']);
             $table->index(['calendar_id', 'is_active']);
             $table->index('external_calendar_id');
-            $table->unique(['user_id', 'provider', 'external_calendar_id']);
+            $table->unique(['user_id', 'provider', 'external_calendar_id'], 'cal_int_user_provider_ext_cal_unique');
         });
     }
 
