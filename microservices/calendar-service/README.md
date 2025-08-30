@@ -1,11 +1,16 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# WL School - Calendar Service
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A Laravel-based microservice for managing school calendars with Google Calendar integration.
+
+## Features
+
+- **Calendar Management**: Create, update, and manage school calendars
+- **Google Calendar Integration**: Bidirectional synchronization with Google Calendar
+- **Event Management**: Full CRUD operations for calendar events
+- **Real-time Sync**: Automatic synchronization with external calendars
+- **Multi-tenant Support**: Support for multiple schools and users
+- **Queue-based Processing**: Asynchronous calendar synchronization
+- **Event Broadcasting**: Real-time notifications for sync completion
 
 ## About Laravel
 
@@ -20,6 +25,136 @@ Laravel is a web application framework with expressive, elegant syntax. We belie
 - [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
 
 Laravel is accessible, powerful, and provides tools required for large, robust applications.
+
+## Installation & Setup
+
+### 1. Clone and Install Dependencies
+
+```bash
+git clone <repository-url>
+cd calendar-service
+composer install
+cp .env.example .env
+php artisan key:generate
+```
+
+### 2. Database Setup
+
+```bash
+php artisan migrate
+php artisan db:seed
+```
+
+### 3. Google Calendar API Setup
+
+#### Step 1: Create Google Cloud Project
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select an existing one
+3. Enable the Google Calendar API
+
+#### Step 2: Create OAuth 2.0 Credentials
+1. Go to "Credentials" in the Google Cloud Console
+2. Click "Create Credentials" > "OAuth 2.0 Client IDs"
+3. Set application type to "Web application"
+4. Add authorized redirect URIs:
+   - `http://localhost:8000/auth/google/callback` (development)
+   - `https://yourdomain.com/auth/google/callback` (production)
+
+#### Step 3: Configure Environment Variables
+
+Update your `.env` file with the Google Calendar credentials:
+
+```env
+GOOGLE_CALENDAR_CLIENT_ID=your_client_id_here
+GOOGLE_CALENDAR_CLIENT_SECRET=your_client_secret_here
+GOOGLE_CALENDAR_REDIRECT_URI=http://localhost:8000/auth/google/callback
+GOOGLE_CALENDAR_APPLICATION_NAME="WL School Calendar Service"
+GOOGLE_CALENDAR_SCOPES="https://www.googleapis.com/auth/calendar"
+
+# Calendar Sync Configuration
+CALENDAR_SYNC_ENABLED=true
+CALENDAR_SYNC_INTERVAL=15
+CALENDAR_MAX_SYNC_EVENTS=1000
+```
+
+### 4. Queue Configuration
+
+For asynchronous calendar synchronization, configure your queue driver:
+
+```env
+QUEUE_CONNECTION=database
+```
+
+Then run the queue worker:
+
+```bash
+php artisan queue:work
+```
+
+### 5. Broadcasting Setup (Optional)
+
+For real-time sync notifications, configure broadcasting:
+
+```env
+BROADCAST_CONNECTION=pusher
+# Add your Pusher credentials
+```
+
+## API Endpoints
+
+### Authentication
+- `GET /api/auth/google` - Get Google OAuth authorization URL
+- `GET /api/auth/google/callback` - Handle OAuth callback
+
+### Calendar Management
+- `POST /api/calendars/{calendar}/sync` - Sync calendar with Google
+- `GET /api/calendars/{calendar}/status` - Get sync status
+- `DELETE /api/calendars/{calendar}/disconnect` - Disconnect from Google
+- `GET /api/calendars/{calendar}/google-calendars` - List Google calendars
+
+### Events
+- `GET /api/calendars/{calendar}/events` - List events
+- `POST /api/calendars/{calendar}/events` - Create event
+- `PUT /api/events/{event}` - Update event
+- `DELETE /api/events/{event}` - Delete event
+
+## Artisan Commands
+
+### Calendar Synchronization
+
+```bash
+# Sync all calendars
+php artisan calendar:sync
+
+# Sync specific calendar
+php artisan calendar:sync --calendar=1
+
+# Force sync (ignore last sync time)
+php artisan calendar:sync --force
+
+# Dry run (preview changes)
+php artisan calendar:sync --dry-run
+```
+
+## Queue Jobs
+
+- `SyncCalendarJob` - Handles asynchronous calendar synchronization
+- Automatically retries failed syncs with exponential backoff
+- Sends notifications on completion/failure
+
+## Events & Listeners
+
+- `CalendarSyncCompleted` - Fired when sync completes (success or failure)
+- `SendCalendarSyncNotification` - Handles sync completion notifications
+
+## Configuration
+
+All configuration is in `config/google-calendar.php`:
+
+- OAuth credentials and scopes
+- Sync settings (interval, batch size, timeout)
+- Color mapping for Google Calendar
+- Default timezone and reminder settings
 
 ## Learning Laravel
 
