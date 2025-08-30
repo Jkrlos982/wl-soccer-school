@@ -19,7 +19,7 @@ class Injury extends Model
         'injury_type',
         'body_part',
         'severity',
-        'injury_date',
+        'injury_datetime',
         'injury_time',
         'location',
         'activity_during_injury',
@@ -41,7 +41,7 @@ class Injury extends Model
         'surgery_date',
         'surgeon_name',
         'hospital',
-        'estimated_recovery_time',
+        'estimated_recovery_days',
         'actual_recovery_time',
         'return_to_play_date',
         'return_to_play_clearance',
@@ -51,6 +51,8 @@ class Injury extends Model
         'psychological_impact',
         'status',
         'notes',
+        'description',
+        'injury_context',
         'attachments',
         'insurance_claim_number',
         'insurance_approved',
@@ -61,7 +63,7 @@ class Injury extends Model
     ];
 
     protected $casts = [
-        'injury_date' => 'date',
+        'injury_datetime' => 'datetime',
         'injury_time' => 'datetime:H:i',
         'diagnosis_date' => 'date',
         'surgery_date' => 'date',
@@ -162,11 +164,11 @@ class Injury extends Model
      */
     public function isRecoveryOverdue(): bool
     {
-        if (!$this->estimated_recovery_time || $this->status === 'recovered') {
+        if (!$this->estimated_recovery_days || $this->status === 'recovered') {
             return false;
         }
 
-        $estimatedRecoveryDate = $this->injury_date->addDays($this->estimated_recovery_time);
+        $estimatedRecoveryDate = $this->injury_datetime->addDays($this->estimated_recovery_days);
         return now() > $estimatedRecoveryDate;
     }
 }

@@ -30,6 +30,7 @@ class MedicalCertificate extends Model
         'recommendations',
         'restrictions',
         'status',
+        'clearance_status',
         'revocation_reason',
         'revocation_date',
         'revoked_by',
