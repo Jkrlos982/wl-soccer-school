@@ -155,6 +155,46 @@ services:
       - ./microservices/calendar-service:/var/www/html
       - ./storage/logs/calendar:/var/www/html/storage/logs
 
+  # Medical Service
+  medical-service:
+    build:
+      context: ./microservices/medical-service
+      dockerfile: Dockerfile
+    ports:
+      - "8006:80"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql-medical
+      - DB_PORT=3306
+      - DB_DATABASE=wl_school_medical
+      - DB_USERNAME=root
+      - DB_PASSWORD=password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8004
+      - SPORTS_SERVICE_URL=http://sports-service:8000
+      - CALENDAR_SERVICE_URL=http://calendar-service:8005
+      - MEDICAL_EXAM_VALIDITY_MONTHS=12
+      - INJURY_FOLLOWUP_DAYS=30
+      - CERTIFICATE_VALIDITY_DAYS=90
+      - MEDICAL_DATA_ENCRYPTION=true
+      - GDPR_COMPLIANCE=true
+      - DATA_RETENTION_YEARS=7
+    depends_on:
+      - mysql-medical
+      - redis
+    networks:
+      - wl-school-network
+    volumes:
+      - ./microservices/medical-service:/var/www/html
+      - ./storage/logs/medical:/var/www/html/storage/logs
+
   # Frontend PWA
   frontend-pwa:
     build:
@@ -169,12 +209,14 @@ services:
       - REACT_APP_SPORTS_SERVICE_URL=http://localhost:8003
       - REACT_APP_NOTIFICATION_SERVICE_URL=http://localhost:8004
       - REACT_APP_CALENDAR_SERVICE_URL=http://localhost:8005
+      - REACT_APP_MEDICAL_SERVICE_URL=http://localhost:8006
     depends_on:
       - auth-service
       - financial-service
       - sports-service
       - notification-service
       - calendar-service
+      - medical-service
     networks:
       - wl-school-network
     volumes:
@@ -251,6 +293,19 @@ services:
     networks:
       - wl-school-network
 
+  # Medical Database
+  mysql-medical:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: wl_school_medical
+    ports:
+      - "3312:3306"
+    volumes:
+      - mysql_medical_data:/var/lib/mysql
+    networks:
+      - wl-school-network
+
   # Redis Cache
   redis:
     image: redis:7-alpine
@@ -313,6 +368,7 @@ volumes:
   mysql_sports_data:
   mysql_notifications_data:
   mysql_calendar_data:
+  mysql_medical_data:
   redis_data:
 
 networks:
