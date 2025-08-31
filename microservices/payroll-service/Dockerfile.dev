@@ -1,4 +1,4 @@
-FROM php:8.2-fpm
+FROM php:8.3-fpm
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -10,11 +10,17 @@ RUN apt-get update && apt-get install -y \
     libzip-dev \
     zip \
     unzip \
-    wkhtmltopdf \
     supervisor \
     cron \
     nodejs \
     npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install wkhtmltopdf from official source
+RUN curl -L https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.bookworm_amd64.deb -o wkhtmltox.deb \
+    && apt-get update \
+    && apt-get install -y ./wkhtmltox.deb \
+    && rm wkhtmltox.deb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install PHP extensions

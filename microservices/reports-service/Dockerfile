@@ -1,4 +1,4 @@
-FROM php:8.2-fpm
+FROM php:8.3-fpm
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -12,11 +12,18 @@ RUN apt-get update && apt-get install -y \
     libjpeg62-turbo-dev \
     zip \
     unzip \
-    wkhtmltopdf \
     supervisor \
     cron \
     nodejs \
-    npm
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install wkhtmltopdf from official source
+RUN curl -L https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.bookworm_amd64.deb -o wkhtmltox.deb \
+    && apt-get update \
+    && apt-get install -y ./wkhtmltox.deb \
+    && rm wkhtmltox.deb \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
@@ -53,6 +60,8 @@ RUN mkdir -p /var/www/storage/app/reports/cache
 RUN mkdir -p /var/www/storage/app/charts
 
 # Configure supervisor
+RUN mkdir -p /var/log/supervisor
+COPY docker/supervisord.conf /etc/supervisor/supervisord.conf
 COPY docker/supervisor/laravel-worker.conf /etc/supervisor/conf.d/
 COPY docker/supervisor/horizon.conf /etc/supervisor/conf.d/
 
