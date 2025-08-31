@@ -1,0 +1,68 @@
+FROM php:8.2-fpm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    libpng-dev \
+    libonig-dev \
+    libxml2-dev \
+    libzip-dev \
+    zip \
+    unzip \
+    wkhtmltopdf \
+    supervisor \
+    cron \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PHP extensions
+RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
+
+# Install Xdebug for development
+RUN pecl install xdebug \
+    && docker-php-ext-enable xdebug
+
+# Configure Xdebug
+RUN echo "xdebug.mode=develop,debug" >> /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini \
+    && echo "xdebug.client_host=host.docker.internal" >> /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini \
+    && echo "xdebug.client_port=9003" >> /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+
+# Install Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+# Set working directory
+WORKDIR /var/www
+
+# Copy composer files first for better caching
+COPY composer.json composer.lock ./
+
+# Install PHP dependencies
+RUN composer install --no-scripts --no-autoloader
+
+# Copy application
+COPY . /var/www
+
+# Complete composer installation
+RUN composer dump-autoload --optimize
+
+# Set permissions
+RUN chown -R www-data:www-data /var/www
+RUN chmod -R 755 /var/www/storage
+RUN chmod -R 755 /var/www/bootstrap/cache
+
+# Create directories for payroll files
+RUN mkdir -p /var/www/storage/app/payroll/receipts
+RUN mkdir -p /var/www/storage/app/payroll/reports
+RUN mkdir -p /var/www/storage/app/payroll/backups
+
+# Create log directories
+RUN mkdir -p /var/www/storage/logs
+RUN touch /var/www/storage/logs/laravel.log
+RUN chown -R www-data:www-data /var/www/storage/logs
+
+EXPOSE 9000
+
+# Start PHP-FPM
+CMD ["php-fpm"]

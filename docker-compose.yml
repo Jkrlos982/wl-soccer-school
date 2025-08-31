@@ -195,6 +195,53 @@ services:
       - ./microservices/medical-service:/var/www/html
       - ./storage/logs/medical:/var/www/html/storage/logs
 
+  # Payroll Service
+  payroll-service:
+    build:
+      context: ./microservices/payroll-service
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8007:9000"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql-payroll
+      - DB_PORT=3306
+      - DB_DATABASE=wl_school_payroll
+      - DB_USERNAME=root
+      - DB_PASSWORD=password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8004
+      - FINANCIAL_SERVICE_URL=http://financial-service:8000
+      - MEDICAL_SERVICE_URL=http://medical-service:8006
+      - DEFAULT_CURRENCY=COP
+      - MINIMUM_WAGE=1300000
+      - HEALTH_CONTRIBUTION_RATE=0.04
+      - PENSION_CONTRIBUTION_RATE=0.04
+      - ARL_CONTRIBUTION_RATE=0.00522
+      - INCOME_TAX_EXEMPT_AMOUNT=2392000
+      - OVERTIME_MULTIPLIER=1.25
+      - NIGHT_SHIFT_MULTIPLIER=1.35
+      - HOLIDAY_MULTIPLIER=1.75
+      - VACATION_DAYS_PER_YEAR=15
+      - SEVERANCE_MULTIPLIER=1.0
+      - THIRTEENTH_SALARY_ENABLED=true
+      - FOURTEENTH_SALARY_ENABLED=true
+    depends_on:
+      - mysql-payroll
+      - redis
+    networks:
+      - wl-school-network
+    volumes:
+      - ./microservices/payroll-service:/var/www
+      - ./storage/logs/payroll:/var/www/storage/logs
+
   # Frontend PWA
   frontend-pwa:
     build:
@@ -210,6 +257,7 @@ services:
       - REACT_APP_NOTIFICATION_SERVICE_URL=http://localhost:8004
       - REACT_APP_CALENDAR_SERVICE_URL=http://localhost:8005
       - REACT_APP_MEDICAL_SERVICE_URL=http://localhost:8006
+      - REACT_APP_PAYROLL_SERVICE_URL=http://localhost:8007
     depends_on:
       - auth-service
       - financial-service
@@ -217,6 +265,7 @@ services:
       - notification-service
       - calendar-service
       - medical-service
+      - payroll-service
     networks:
       - wl-school-network
     volumes:
@@ -306,6 +355,20 @@ services:
     networks:
       - wl-school-network
 
+  # Payroll Database
+  mysql-payroll:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: wl_school_payroll
+    ports:
+      - "3313:3306"
+    volumes:
+      - mysql_payroll_data:/var/lib/mysql
+      - ./database/migrations/payroll_service.sql:/docker-entrypoint-initdb.d/payroll_service.sql
+    networks:
+      - wl-school-network
+
   # Redis Cache
   redis:
     image: redis:7-alpine
@@ -369,6 +432,7 @@ volumes:
   mysql_notifications_data:
   mysql_calendar_data:
   mysql_medical_data:
+  mysql_payroll_data:
   redis_data:
 
 networks:
