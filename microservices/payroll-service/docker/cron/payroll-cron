@@ -1,0 +1,18 @@
+# Payroll automation cron jobs
+# Run Laravel scheduler every minute
+* * * * * www-data cd /var/www && php artisan schedule:run >> /dev/null 2>&1
+
+# Generate monthly payroll reports on the 1st of each month at 2 AM
+0 2 1 * * www-data cd /var/www && php artisan payroll:generate-monthly-reports >> /var/www/storage/logs/payroll-cron.log 2>&1
+
+# Process payroll calculations on the 25th of each month at 1 AM
+0 1 25 * * www-data cd /var/www && php artisan payroll:calculate-monthly >> /var/www/storage/logs/payroll-cron.log 2>&1
+
+# Backup payroll data daily at 3 AM
+0 3 * * * www-data cd /var/www && php artisan backup:run --only-db >> /var/www/storage/logs/backup-cron.log 2>&1
+
+# Clean old payroll files weekly on Sundays at 4 AM
+0 4 * * 0 www-data cd /var/www && php artisan payroll:cleanup-old-files >> /var/www/storage/logs/cleanup-cron.log 2>&1
+
+# Generate tax reports quarterly (1st day of Jan, Apr, Jul, Oct) at 5 AM
+0 5 1 1,4,7,10 * www-data cd /var/www && php artisan payroll:generate-tax-reports >> /var/www/storage/logs/tax-reports-cron.log 2>&1
