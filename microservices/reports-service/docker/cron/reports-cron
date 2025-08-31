@@ -1,0 +1,15 @@
+# Reports Service Cron Jobs
+# Run Laravel scheduler every minute
+* * * * * www-data cd /var/www && php artisan schedule:run >> /dev/null 2>&1
+
+# Generate scheduled reports every 5 minutes
+*/5 * * * * www-data cd /var/www && php artisan reports:generate-scheduled >> /var/www/storage/logs/cron.log 2>&1
+
+# Clean up expired reports daily at 2 AM
+0 2 * * * www-data cd /var/www && php artisan reports:cleanup >> /var/www/storage/logs/cron.log 2>&1
+
+# Update dashboard cache every minute
+* * * * * www-data cd /var/www && php artisan dashboard:refresh-cache >> /dev/null 2>&1
+
+# Check alerts every 5 minutes
+*/5 * * * * www-data cd /var/www && php artisan alerts:check >> /var/www/storage/logs/cron.log 2>&1
