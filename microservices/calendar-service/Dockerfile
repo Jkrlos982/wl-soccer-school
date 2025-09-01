@@ -48,6 +48,7 @@ COPY . /var/www/html
 COPY --chown=calendar:calendar . /var/www/html
 
 # Install dependencies
+ENV COMPOSER_PROCESS_TIMEOUT=600
 RUN composer install --no-dev --optimize-autoloader
 
 # Create necessary directories and set permissions

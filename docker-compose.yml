@@ -27,6 +27,7 @@ services:
     volumes:
       - ./microservices/auth-service:/var/www/html
       - ./storage/logs/auth:/var/www/html/storage/logs
+    mem_limit: 2G
 
   # Financial Service
   financial-service:
@@ -44,11 +45,14 @@ services:
       - DB_DATABASE=wl_school_financial
       - DB_USERNAME=root
       - DB_PASSWORD=password
+    command: bash -c "php-fpm"
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on:
-      - mysql-financial
-      - redis
+      mysql-financial:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - wl-school-network
     volumes:
@@ -56,6 +60,7 @@ services:
       - ./storage/logs/financial:/var/www/html/storage/logs
       - /var/www/html/vendor
       - /var/www/html/node_modules
+    mem_limit: 8G
 
   # Sports Service
   sports-service:
@@ -335,9 +340,14 @@ services:
       - "3308:3306"
     volumes:
       - mysql_financial_data:/var/lib/mysql
-      - ./database/migrations/financial_service.sql:/docker-entrypoint-initdb.d/financial_service.sql
+      # - ./database/migrations/financial_service.sql:/docker-entrypoint-initdb.d/financial_service.sql
     networks:
       - wl-school-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    restart: always
 
   # Sports Database
   sports-db:
@@ -437,7 +447,7 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "8000:80"
+      - "8080:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf
       - ./nginx/conf.d:/etc/nginx/conf.d
@@ -459,7 +469,7 @@ services:
       PMA_USER: root
       PMA_PASSWORD: password
     ports:
-      - "8080:80"
+      - "8082:80"
     depends_on:
       - mysql-auth
       - mysql-financial

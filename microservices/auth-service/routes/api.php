@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\RoleController;
+use App\Http\Controllers\Api\V1\Auth\SchoolRegistrationController;
 
 /*
 |--------------------------------------------------------------------------
@@ -39,6 +40,9 @@ Route::prefix('v1')->group(function () {
             Route::post('/logout', [AuthController::class, 'logout']);
             Route::post('/refresh', [AuthController::class, 'refresh']);
         });
+
+        // School Registration Route (public)
+        Route::post('/register-school', [SchoolRegistrationController::class, 'registerSchool']);
     });
     
     // Role and Permission Management routes (protected)
