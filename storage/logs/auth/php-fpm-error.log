@@ -317,3 +317,11 @@
 [01-Sep-2025 19:19:04] NOTICE: exiting, bye-bye!
 [01-Sep-2025 19:20:34] NOTICE: fpm is running, pid 69
 [01-Sep-2025 19:20:34] NOTICE: ready to handle connections
+[01-Sep-2025 19:32:49] NOTICE: Terminating ...
+[01-Sep-2025 19:32:49] NOTICE: exiting, bye-bye!
+[01-Sep-2025 19:35:09] NOTICE: fpm is running, pid 57
+[01-Sep-2025 19:35:09] NOTICE: ready to handle connections
+[01-Sep-2025 19:49:08] NOTICE: Terminating ...
+[01-Sep-2025 19:49:08] NOTICE: exiting, bye-bye!
+[01-Sep-2025 19:50:38] NOTICE: fpm is running, pid 57
+[01-Sep-2025 19:50:38] NOTICE: ready to handle connections
