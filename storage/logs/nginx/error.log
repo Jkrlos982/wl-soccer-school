@@ -79,3 +79,15 @@
 2025/08/27 20:01:40 [error] 56#56: *88 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.65.1, server: localhost, request: "POST /api/auth/login HTTP/1.1", upstream: "http://172.20.0.5:8000/api/v1/auth/login", host: "localhost:8000"
 2025/08/27 22:45:03 [notice] 25#25: signal process started
 2025/08/28 23:09:19 [error] 20#20: *1 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.65.1, server: localhost, request: "GET /api/v1/sports/health HTTP/1.1", upstream: "http://172.20.0.7:8000/health", host: "localhost:8000"
+2025/08/31 15:46:34 [emerg] 1#1: host not found in upstream "frontend_pwa" in /etc/nginx/conf.d/wl-school.conf:56
+2025/08/31 15:46:39 [emerg] 1#1: host not found in upstream "frontend_pwa" in /etc/nginx/conf.d/wl-school.conf:56
+2025/08/31 16:11:18 [emerg] 1#1: "location" directive is not allowed here in /etc/nginx/conf.d/wl-school.conf:222
+2025/08/31 16:32:01 [emerg] 1#1: "add_header" directive is not allowed here in /etc/nginx/conf.d/wl-school.conf:17
+2025/08/31 16:33:15 [emerg] 1#1: "proxy_pass" directive is not allowed here in /etc/nginx/conf.d/wl-school.conf:22
+2025/08/31 16:34:28 [emerg] 1#1: "limit_req" directive is duplicate in /etc/nginx/conf.d/wl-school.conf:43
+2025/09/01 13:27:11 [emerg] 1#1: "add_header" directive is not allowed here in /etc/nginx/conf.d/wl-school.conf:80
+2025/09/01 13:28:16 [emerg] 1#1: "add_header" directive is not allowed here in /etc/nginx/conf.d/wl-school.conf:80
+2025/09/01 13:29:33 [emerg] 1#1: "add_header" directive is not allowed here in /etc/nginx/conf.d/wl-school.conf:112
+2025/09/01 13:30:40 [emerg] 1#1: "proxy_pass" directive is not allowed here in /etc/nginx/conf.d/wl-school.conf:140
+2025/09/01 13:31:43 [emerg] 1#1: "proxy_pass" directive is not allowed here in /etc/nginx/conf.d/wl-school.conf:150
+2025/09/01 16:54:17 [emerg] 1#1: host not found in upstream "auth-service:8000" in /etc/nginx/nginx.conf:87
